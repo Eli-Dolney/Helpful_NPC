@@ -1,0 +1,16 @@
+{
+  "item.helpfulworkers.recruitment_contract": "Recruitment Contract",
+  "item.helpfulworkers.farmers_kit": "Farmer's Kit",
+  "item.helpfulworkers.foresters_kit": "Forester's Kit",
+  "item.helpfulworkers.miners_kit": "Miner's Kit",
+  "item.helpfulworkers.builders_kit": "Builder's Kit",
+  "item.helpfulworkers.knights_kit": "Knight's Kit",
+  "item.helpfulworkers.archers_kit": "Archer's Kit",
+  "item.helpfulworkers.ranchers_kit": "Rancher's Kit",
+  "item.helpfulworkers.fishermans_kit": "Fisherman's Kit",
+  "item.helpfulworkers.smelters_kit": "Smelter's Kit",
+  "item.helpfulworkers.couriers_kit": "Courier's Kit",
+  "item.helpfulworkers.assignment_clipboard": "Assignment Clipboard",
+  "entity.helpfulworkers.worker": "Worker",
+  "itemGroup.helpfulworkers": "Helpful Workers"
+}

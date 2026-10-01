@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "item": "minecraft:paper" },
+    { "item": "minecraft:wooden_axe" },
+    { "item": "minecraft:oak_sapling" }
+  ],
+  "result": { "id": "helpfulworkers:foresters_kit", "count": 1 }
+}

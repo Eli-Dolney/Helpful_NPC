@@ -1,0 +1,22 @@
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev' version '2.0.141'
+}
+
+version = '0.3.1'
+group = 'com.example.helpfulworkers'
+base { archivesName = 'helpfulworkers' }
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = '21.1.235'
+    runs {
+        client { client() }
+        server { server() }
+    }
+    mods { helpfulworkers { sourceSet sourceSets.main } }
+}
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+tasks.named('runServer') { standardInput = System.in }

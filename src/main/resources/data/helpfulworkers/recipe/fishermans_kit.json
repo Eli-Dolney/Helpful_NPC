@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "item": "minecraft:paper" },
+    { "item": "minecraft:fishing_rod" },
+    { "item": "minecraft:cod" }
+  ],
+  "result": { "id": "helpfulworkers:fishermans_kit", "count": 1 }
+}

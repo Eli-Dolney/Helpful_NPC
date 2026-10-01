@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "item": "minecraft:paper" },
+    { "item": "minecraft:wooden_pickaxe" },
+    { "item": "minecraft:cobblestone" }
+  ],
+  "result": { "id": "helpfulworkers:miners_kit", "count": 1 }
+}

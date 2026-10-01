@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "item": "minecraft:paper" },
+    { "item": "minecraft:bow" },
+    { "item": "minecraft:arrow" }
+  ],
+  "result": { "id": "helpfulworkers:archers_kit", "count": 1 }
+}

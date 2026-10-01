@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "item": "minecraft:paper" },
+    { "item": "minecraft:wooden_shovel" },
+    { "item": "minecraft:bricks" }
+  ],
+  "result": { "id": "helpfulworkers:builders_kit", "count": 1 }
+}

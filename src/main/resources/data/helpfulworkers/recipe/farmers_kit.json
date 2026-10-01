@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    { "item": "minecraft:paper" },
+    { "item": "minecraft:wooden_hoe" },
+    { "item": "minecraft:wheat_seeds" }
+  ],
+  "result": { "id": "helpfulworkers:farmers_kit", "count": 1 }
+}

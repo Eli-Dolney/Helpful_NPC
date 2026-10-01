@@ -1,0 +1,20 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="helpfulworkers"
+version="0.3.1"
+displayName="Helpful Workers"
+description='''Assign helpful NPC workers to farms, forests, mines, and construction jobs.'''
+[[dependencies.helpfulworkers]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.235,21.2)"
+ordering="NONE"
+side="BOTH"
+[[dependencies.helpfulworkers]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.21.2)"
+ordering="NONE"
+side="BOTH"
