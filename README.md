@@ -2,7 +2,7 @@
 
 Recruit NPCs and manage their jobs through dialogue, equipment menus, and a reusable Assignment Clipboard. Version **0.3.1** includes farming, forestry, mining, building, protection, ranching, fishing, smelting, and hauling. No MineColonies dependency is required.
 
-This is an experimental Java Edition mod. See [verification status](VERIFICATION.md) for what has been checked. Back up a world before trying or updating the mod.
+This is an experimental Java Edition mod. The 0.3.1 source builds successfully with Java 21; gameplay, multiplayer, and Windows development still need further testing. Back up a world before trying or updating the mod.
 
 ## Download and install
 
@@ -170,7 +170,7 @@ Server configuration defaults include 10 workers per player, 25 workers under th
 - **Clipboard opens a roster:** start an assignment from worker dialogue first.
 - **Build fails because of Java:** set `JAVA_HOME` to JDK 21 and restart your terminal/editor.
 
-Navigation, mining hazards, inventory edge cases, multiplayer, and larger groups need further gameplay testing. See [VERIFICATION.md](VERIFICATION.md). The older [Cursor handoff](CURSOR_HANDOFF.md) is historical planning material, not the current feature list.
+Navigation, mining hazards, inventory edge cases, multiplayer, and larger groups need further gameplay testing.
 
 ## License
 
