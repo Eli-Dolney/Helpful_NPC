@@ -28,6 +28,7 @@ final class WorkerConfig {
         RANCHER_CAP = b.comment("Max animals of each species in a rancher pen")
             .defineInRange("speciesCap", 8, 2, 32);
         b.pop();
+        SiteSettings.define(b);
         SPEC = b.build();
     }
 

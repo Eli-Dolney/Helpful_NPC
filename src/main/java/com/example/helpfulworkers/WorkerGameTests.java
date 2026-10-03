@@ -124,6 +124,7 @@ public final class WorkerGameTests {
         worker.second = helper.absolutePos(new BlockPos(4, 2, 4));
         BlockPos chest = helper.absolutePos(new BlockPos(2, 2, 2));
         helper.setBlock(new BlockPos(2, 2, 2), net.minecraft.world.level.block.Blocks.CHEST);
+        player.teleportTo(chest.getX() + 1, chest.getY(), chest.getZ() + 1);
         ActionResult result = WorkerActions.setOutput(player, worker, chest);
         helper.assertTrue(result.success(), "Assigning output mid-work must succeed");
         helper.assertTrue(chest.equals(worker.output), "Output must be stored");

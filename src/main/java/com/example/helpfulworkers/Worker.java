@@ -44,7 +44,28 @@ import net.minecraft.world.item.ProjectileWeaponItem;
 import net.minecraft.world.level.Level;
 
 public final class Worker extends PathfinderMob implements RangedAttackMob {
+    private static final net.minecraft.network.syncher.EntityDataAccessor<String> APPEARANCE_NAME = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.STRING);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<String> APPEARANCE_SKIN = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.STRING);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<Boolean> APPEARANCE_SLIM = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.BOOLEAN);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<java.util.Optional<UUID>> APPEARANCE_OWNER = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.OPTIONAL_UUID);
+    @Override protected void defineSynchedData(net.minecraft.network.syncher.SynchedEntityData.Builder builder) {
+        super.defineSynchedData(builder);
+        builder.define(APPEARANCE_NAME, "Worker");
+        builder.define(APPEARANCE_OWNER, java.util.Optional.empty());
+        builder.define(APPEARANCE_SKIN, "auto");
+        builder.define(APPEARANCE_SLIM, false);
+    }
+    UUID skinOwner() { return entityData.get(APPEARANCE_OWNER).orElse(null); }
+    String personalName() { return entityData.get(APPEARANCE_NAME); }
+    String skinKey() { return entityData.get(APPEARANCE_SKIN); }
+    boolean slimSkin() { return entityData.get(APPEARANCE_SLIM); }
+    void setAppearance(String key, boolean slim) {
+        entityData.set(APPEARANCE_SKIN, WorkerAppearance.validSkin(key) ? key : "auto");
+        entityData.set(APPEARANCE_SLIM, slim);
+    }
     UUID owner;
+    UUID siteId, constructionId, supplyDeliveryWorker;
+    BlockPos supplyDelivery;
     String role = "idle";
     String mode = "excavate";
     String status = "Waiting for an assignment";
@@ -139,6 +160,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     /** Flags synced to the dialogue UI for checkbox state. */
     List<String> collectFlags() {
         List<String> flags = new ArrayList<>();
+        if (siteId != null) flags.add("site");
         for (String crop : enabledCrops) flags.add("crop:" + crop);
         if (useBoneMeal) flags.add("bonemeal");
         for (String animal : ranchAnimals) flags.add("rancher:" + animal);
@@ -150,7 +172,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         return flags;
     }
 
-    public void setOwner(UUID owner) { this.owner = owner; }
+    public void setOwner(UUID owner) { this.owner = owner; entityData.set(APPEARANCE_OWNER, java.util.Optional.ofNullable(owner)); }
     public boolean owns(Player player) { return owner != null && owner.equals(player.getUUID()); }
     @Override public boolean removeWhenFarAway(double distanceToClosestPlayer) { return false; }
 
@@ -161,6 +183,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
 
     void refreshDisplayName() {
         String base = baseName == null || baseName.isBlank() ? "Worker" : baseName;
+        entityData.set(APPEARANCE_NAME, base);
         if ("idle".equals(role) || role == null || role.isBlank()) {
             setCustomName(Component.literal(base));
         } else {
@@ -250,10 +273,12 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     private void tickWork(ServerLevel level) {
         if (isSleeping() && !level.isNight()) stopSleeping();
         if (WorkerSessions.isSuspended(this)) {
+            SiteJobs.suspend(this);
             getNavigation().stop();
             return;
         }
         if (recoverUntil > level.getGameTime()) {
+            SiteJobs.suspend(this);
             getNavigation().stop();
             setStatus("Recovering (" + ((recoverUntil - level.getGameTime()) / 20) + "s)");
             flushStatus();
@@ -262,12 +287,19 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         tryEatAndHeal(level);
         WorkerEquip.tick(level, this);
         if (WorkerActions.isCombatRole(role)) {
-            if (!working) working = true;
+            if(siteId != null) {
+                var site=SiteData.get(level).sites.get(siteId);
+                if(site==null || !getUUID().equals(site.worker) || !owner.equals(site.owner)) { SiteActions.release(level,this); return; }
+                if(site.paused || !working || !level.hasChunkAt(site.core()) || !level.getBlockState(site.core()).is(SiteBlocks.CORE.get())) {
+                    getNavigation().stop(); setTarget(null); setStatus("Guard site paused or unavailable"); flushStatus(); return;
+                }
+            } else if (!working) working = true;
             updateCombatStatus();
             flushStatus();
             return;
         }
         if (!working) {
+            SiteJobs.suspend(this);
             if (needsUnload && output == null && bed != null && level.isLoaded(bed)) {
                 if (!approachWithin(bed, 2, 2)) setStatus(Jobs.OUT_OF_SPACE + " Returning to bed.");
                 else { getNavigation().stop(); setStatus(Jobs.OUT_OF_SPACE); }
@@ -280,6 +312,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             return;
         }
         if (level.isNight() && bed != null) {
+            SiteJobs.suspend(this);
             if (!level.isLoaded(bed)) { setStatus("Bed chunk unloaded"); flushStatus(); return; }
             if (!approachWithin(bed, 2, 2)) {
                 if (status.startsWith("Traveling")) setStatus("Going home");
@@ -291,7 +324,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             flushStatus();
             return;
         }
-        if (idleUntil > level.getGameTime() && "forester".equals(role)) {
+        if (siteId == null && idleUntil > level.getGameTime() && "forester".equals(role)) {
             setStatus("Waiting for trees to grow (" + ((idleUntil - level.getGameTime()) / 20) + "s)");
             flushStatus();
             return;
@@ -353,12 +386,22 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
      * repeated failures, the worker hops to a safe spot beside it instead of giving up.
      */
     boolean approachWithin(BlockPos pos, double horizontal, double vertical) {
+        if (siteId != null || constructionId != null) return SiteNavigation.approach(this, pos, horizontal, vertical);
         if (!level().isLoaded(pos)) { status = "Target chunk unloaded"; return false; }
         if (!pos.equals(navigationTarget)) resetRoute(pos);
         double dx = getX() - (pos.getX() + 0.5);
         double dz = getZ() - (pos.getZ() + 0.5);
         double dy = Math.abs(pos.getY() + 0.5 - getY());
         if (dx * dx + dz * dz <= horizontal * horizontal && dy <= vertical) {
+            if (siteId != null) {
+                var hit = level().clip(new net.minecraft.world.level.ClipContext(getEyePosition(), pos.getCenter(), net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, this));
+                boolean managedTree = "forester".equals(role) && level().getBlockState(hit.getBlockPos()).getBlock() instanceof SiteBlocks.ManagedBlock;
+                boolean sameChest = level() instanceof ServerLevel server && level().getBlockState(pos).getBlock() instanceof net.minecraft.world.level.block.ChestBlock && WarehouseJobs.canonical(server, pos).equals(WarehouseJobs.canonical(server, hit.getBlockPos()));
+                if (hit.getType() != net.minecraft.world.phys.HitResult.Type.MISS && !hit.getBlockPos().equals(pos) && !managedTree && !sameChest) {
+                    routeFailed(pos);
+                    return false;
+                }
+            }
             getNavigation().stop();
             resetRoute(pos);
             failedRoutes = 0;
@@ -395,6 +438,13 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
 
     private void routeFailed(BlockPos pos) {
         getNavigation().stop();
+        if (siteId != null || constructionId != null) {
+            working = false;
+            SiteJobs.suspend(this);
+            WarehouseJobs.release(getUUID());
+            setStatus("Blocked route at " + pos.toShortString() + " — clear path, then Start work");
+            return;
+        }
         boolean repeat = isUnreachable(pos);
         failedRoutes++;
         unreachable.put(pos.asLong(), level().getGameTime() + 2400);
@@ -549,7 +599,13 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     @Override public void addAdditionalSaveData(CompoundTag tag) {
         super.addAdditionalSaveData(tag);
         if (owner != null) tag.putUUID("Owner", owner);
+        if (siteId != null) tag.putUUID("SiteId", siteId);
+        if (supplyDelivery != null) tag.putLong("SupplyDelivery", supplyDelivery.asLong());
+        if (supplyDeliveryWorker != null) tag.putUUID("SupplyDeliveryWorker",supplyDeliveryWorker);
+        if (constructionId != null) tag.putUUID("ConstructionId", constructionId);
         if (baseName != null && !baseName.isBlank()) tag.putString("BaseName", baseName);
+        tag.putString("WorkerSkin", skinKey());
+        tag.putBoolean("WorkerSkinSlim", slimSkin());
         tag.putString("Role", role); tag.putString("Mode", mode); tag.putString("Status", status);
         tag.putString("CompanionMode", companionMode == null ? "follow" : companionMode);
         tag.putBoolean("Working", working); tag.putBoolean("UseBoneMeal", useBoneMeal);
@@ -597,7 +653,12 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
 
     @Override public void readAdditionalSaveData(CompoundTag tag) {
         super.readAdditionalSaveData(tag);
-        if (tag.hasUUID("Owner")) owner = tag.getUUID("Owner");
+        if (tag.hasUUID("Owner")) setOwner(tag.getUUID("Owner"));
+        setAppearance(tag.contains("WorkerSkin") ? tag.getString("WorkerSkin") : "auto", tag.getBoolean("WorkerSkinSlim"));
+        siteId = tag.hasUUID("SiteId") ? tag.getUUID("SiteId") : null;
+        supplyDelivery = tag.contains("SupplyDelivery") ? BlockPos.of(tag.getLong("SupplyDelivery")) : null;
+        supplyDeliveryWorker = tag.hasUUID("SupplyDeliveryWorker") ? tag.getUUID("SupplyDeliveryWorker") : null;
+        constructionId = tag.hasUUID("ConstructionId") ? tag.getUUID("ConstructionId") : null;
         role = tag.contains("Role") && !tag.getString("Role").isEmpty() ? tag.getString("Role") : "idle";
         mode = tag.contains("Mode") && !tag.getString("Mode").isEmpty() ? tag.getString("Mode") : "excavate";
         status = tag.contains("Status") && !tag.getString("Status").isEmpty() ? tag.getString("Status") : "Waiting for an assignment";
@@ -686,6 +747,12 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             if ("stay".equals(mode)) {
                 worker.getNavigation().stop();
                 return;
+            }
+            if(worker.siteId!=null && worker.level() instanceof ServerLevel l) {
+                var site=SiteData.get(l).sites.get(worker.siteId);
+                if(site==null || site.paused || !worker.working || !site.active()) { worker.getNavigation().stop();return; }
+                BlockPos post=site.template.isEmpty() ? (worker.role.equals("archer")?site.at(4,6,4):site.entrance()):site.station();
+                worker.approachWithin(post,1,1); return;
             }
             if ("guard".equals(mode)) {
                 Worker.AreaBounds box = worker.areaBounds();

@@ -15,7 +15,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 /** Clipboard worker monitor: what every owned worker is doing, with quick pause/recall controls. */
 @OnlyIn(Dist.CLIENT)
 public final class WorkerRosterScreen extends Screen {
-    private static final int PANEL_WIDTH = 348;
+    private int panelWidth() { return Math.min(380, width - 16); }
     private static final int ROW_HEIGHT = 46;
 
     private final List<WorkerNetwork.RosterEntry> entries = new ArrayList<>();
@@ -39,7 +39,7 @@ public final class WorkerRosterScreen extends Screen {
         rebuild();
     }
 
-    private int panelLeft() { return (width - PANEL_WIDTH) / 2; }
+    private int panelLeft() { return (width - panelWidth()) / 2; }
     private int panelHeight() { return Math.min(height - 16, 300); }
     private int panelTop() { return Math.max(8, (height - panelHeight()) / 2); }
     private int listTop() { return panelTop() + 30; }
@@ -52,7 +52,7 @@ public final class WorkerRosterScreen extends Screen {
         for (int i = 0; i < rows && scroll + i < entries.size(); i++) {
             WorkerNetwork.RosterEntry e = entries.get(scroll + i);
             int y = listTop() + i * ROW_HEIGHT;
-            int bx = left + PANEL_WIDTH - 128;
+            int bx = left + panelWidth() - 128;
             boolean combat = WorkerActions.isCombatRole(e.role());
             boolean unloaded = e.id() < 0;
             if (!combat && !unloaded) {
@@ -60,8 +60,8 @@ public final class WorkerRosterScreen extends Screen {
                     b -> send(e.id(), e.working() ? "pause" : "resume")).bounds(bx, y + 2, 58, 18).build());
             }
             if (!unloaded) {
-                addRenderableWidget(Button.builder(Component.literal(e.hasBed() ? "Recall" : "No bed"),
-                    b -> send(e.id(), "recall")).bounds(bx + 62, y + 2, 58, 18).build());
+                Button recall=WorkerIcons.button(bx + 62,y + 2,58,"Home",WorkerIcons.Kind.BED,0xff79b8e8,b -> send(e.id(),"recall"));
+                recall.active=e.hasBed();addRenderableWidget(recall);
                 addRenderableWidget(Button.builder(Component.literal("Come here"),
                     b -> send(e.id(), "come")).bounds(bx, y + 22, 58, 18).build());
                 Button area = Button.builder(Component.literal("Show area"),
@@ -71,15 +71,17 @@ public final class WorkerRosterScreen extends Screen {
             }
         }
         int bottomY = panelTop() + panelHeight() - 24;
-        addRenderableWidget(Button.builder(Component.literal("▲"), b -> { scroll = Math.max(0, scroll - 1); rebuild(); })
+        var previous=addRenderableWidget(Button.builder(Component.literal("▲"), b -> { scroll = Math.max(0, scroll - 1); rebuild(); })
             .bounds(left + 12, bottomY, 30, 18).build());
-        addRenderableWidget(Button.builder(Component.literal("▼"), b -> {
+        previous.active=scroll>0;
+        var next=addRenderableWidget(Button.builder(Component.literal("▼"), b -> {
             scroll = Math.min(Math.max(0, entries.size() - visibleRows()), scroll + 1); rebuild();
         }).bounds(left + 46, bottomY, 30, 18).build());
+        next.active=scroll+rows<entries.size();
         addRenderableWidget(Button.builder(Component.literal("Refresh"), b -> send(-1, "refresh"))
             .bounds(left + 80, bottomY, 60, 18).build());
         addRenderableWidget(Button.builder(Component.literal("Close"), b -> onClose())
-            .bounds(left + PANEL_WIDTH - 72, bottomY, 60, 18).build());
+            .bounds(left + panelWidth() - 72, bottomY, 60, 18).build());
     }
 
     @Override
@@ -108,26 +110,25 @@ public final class WorkerRosterScreen extends Screen {
         renderBackground(graphics, mouseX, mouseY, partialTick);
         int left = panelLeft();
         int top = panelTop();
-        int right = left + PANEL_WIDTH;
+        int right = left + panelWidth();
         int bottom = top + panelHeight();
-        graphics.fill(left - 2, top - 2, right + 2, bottom + 2, 0xFF1A1A1A);
-        graphics.fill(left, top, right, bottom, 0xF0181C22);
-        graphics.fill(left, top, right, top + 3, 0xFFE0B04A);
-        graphics.drawString(font, "Your workers (" + entries.size() + ")", left + 12, top + 12, 0xFFFFFF, false);
-        graphics.drawString(font, "updates every 2s", right - 12 - font.width("updates every 2s"), top + 12, 0xFF78909C, false);
+        WorkerUi.frame(graphics,left,top,panelWidth(),panelHeight());
+        WorkerIcons.draw(graphics, WorkerIcons.Kind.WORKER, left + 10, top + 7, 0xffe5edf5, 0xffd7b773);
+        graphics.drawString(font, "Your workers (" + entries.size() + ")", left + 32, top + 12, 0xFFFFFF, false);
         if (entries.isEmpty()) {
-            graphics.drawWordWrap(font, Component.literal("No workers found nearby. Workers in unloaded chunks don't show up."),
-                left + 12, listTop() + 8, PANEL_WIDTH - 24, 0xFFB0BEC5);
+            graphics.drawWordWrap(font, Component.literal("No workers registered yet. Recruit a worker to see them here."),
+                left + 12, listTop() + 8, panelWidth() - 24, 0xFFB0BEC5);
         }
         int rows = visibleRows();
-        int textWidth = PANEL_WIDTH - 24 - 132 - 20;
+        int textWidth = panelWidth() - 24 - 132 - 20;
         for (int i = 0; i < rows && scroll + i < entries.size(); i++) {
             WorkerNetwork.RosterEntry e = entries.get(scroll + i);
             int y = listTop() + i * ROW_HEIGHT;
             graphics.fill(left + 6, y - 2, right - 6, y + ROW_HEIGHT - 4, (i % 2 == 0) ? 0x18FFFFFF : 0x0CFFFFFF);
             String key = WorkerActions.isRole(e.role()) ? e.role() : "idle";
-            graphics.blit(ResourceLocation.fromNamespaceAndPath(HelpfulWorkers.ID, "textures/gui/role_" + key + ".png"),
-                left + 10, y + 2, 0, 0, 16, 16, 16, 16);
+            if (minecraft.level != null && minecraft.level.getEntity(e.id()) instanceof Worker worker)
+                WorkerAppearanceScreen.face(graphics, WorkerSkins.resolve(worker), left + 10, y + 2, 16);
+            else WorkerIcons.draw(graphics,WorkerIcons.Kind.WORKER,left + 10,y + 2,0xffe5edf5,0xffd7b773);
             int state = stateColor(e);
             graphics.fill(left + 12, y + 22, left + 24, y + 34, state);
             int tx = left + 32;
@@ -136,7 +137,8 @@ public final class WorkerRosterScreen extends Screen {
             graphics.drawString(font, e.x() + ", " + e.y() + ", " + e.z() + "  ·  " + e.distance() + "m away",
                 tx, y + 26, 0xFF90A4AE, false);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
+        graphics.drawString(font,entries.isEmpty()?"0 workers":(scroll+1)+"–"+Math.min(entries.size(),scroll+visibleRows())+" / "+entries.size(),left+150,bottom-19,WorkerUi.MUTED,false);
+        for (var widget : renderables) widget.render(graphics, mouseX, mouseY, partialTick);
         for (int i = 0; i < rows && scroll + i < entries.size(); i++) {
             WorkerNetwork.RosterEntry e = entries.get(scroll + i);
             int y = listTop() + i * ROW_HEIGHT;

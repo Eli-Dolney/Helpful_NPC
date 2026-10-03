@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "helpfulworkers:block/site_controller"
+    }
+  }
+}

@@ -3,7 +3,7 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.141'
 }
 
-version = '0.3.1'
+version = '0.5.3'
 group = 'com.example.helpfulworkers'
 base { archivesName = 'helpfulworkers' }
 
@@ -13,7 +13,17 @@ neoForge {
     version = '21.1.235'
     runs {
         client { client() }
+        uiTest {
+            client()
+            gameDirectory = file('run/uitest')
+            systemProperty 'helpfulworkers.uiTest', 'true'
+        }
         server { server() }
+        gameTestServer {
+            type = "gameTestServer"
+            systemProperty 'neoforge.enabledGameTestNamespaces', 'helpfulworkers'
+            gameDirectory = file('run/gametest')
+        }
     }
     mods { helpfulworkers { sourceSet sourceSets.main } }
 }

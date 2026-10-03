@@ -74,6 +74,8 @@ final class WorkerActions {
     static ActionResult pause(ServerPlayer player, Worker worker) {
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
+        WarehouseJobs.release(worker.getUUID());
+        SiteJobs.suspend(worker);
         worker.working = false;
         worker.target = null;
         worker.getNavigation().stop();
@@ -103,6 +105,7 @@ final class WorkerActions {
     }
 
     static ActionResult setRole(ServerPlayer player, Worker worker, String role, boolean requireKit) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction before changing roles");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (!isRole(role)) return ActionResult.fail("Unknown role: " + role);
@@ -164,6 +167,7 @@ final class WorkerActions {
     }
 
     static ActionResult setMode(ServerPlayer player, Worker worker, String mode) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (!mode.equals("excavate") && !mode.equals("branches") && !mode.equals("terraform")
@@ -216,6 +220,7 @@ final class WorkerActions {
     }
 
     static ActionResult setArea(ServerPlayer player, Worker worker, BlockPos first, BlockPos second, int digDepth) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction before changing zones");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (first == null || second == null) return ActionResult.fail("Both area corners are required");
@@ -274,6 +279,7 @@ final class WorkerActions {
      * Auto-picks a plains small house when nothing is loaded yet.
      */
     static ActionResult startVillageOnPlot(ServerPlayer player, Worker worker) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Finish or dismantle the worker site first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (!"builder".equals(worker.role)) return ActionResult.fail("Only builders can build village houses");
@@ -327,6 +333,7 @@ final class WorkerActions {
     }
 
     static ActionResult prepareVillageHouse(ServerPlayer player, Worker worker, String entryId) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Finish or dismantle the worker site first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (!"builder".equals(worker.role)) return ActionResult.fail("Only builders can load village houses");
@@ -357,6 +364,7 @@ final class WorkerActions {
     }
 
     static ActionResult clearArea(ServerPlayer player, Worker worker) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         worker.first = null;
@@ -414,6 +422,7 @@ final class WorkerActions {
     }
 
     static ActionResult setOutput(ServerPlayer player, Worker worker, BlockPos pos) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         ActionResult range = requireNear(player, pos);
@@ -469,6 +478,7 @@ final class WorkerActions {
     }
 
     static ActionResult clearOutput(ServerPlayer player, Worker worker) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         worker.output = null;
@@ -705,6 +715,7 @@ final class WorkerActions {
     }
 
     static ActionResult loadBlueprint(ServerPlayer player, Worker worker, String name) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Finish or dismantle the worker site first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         String result;

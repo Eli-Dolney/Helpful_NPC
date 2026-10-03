@@ -33,14 +33,14 @@ public final class WorkerRenderer extends HumanoidMobRenderer<Worker, PlayerMode
 
     @Override
     public ResourceLocation getTextureLocation(Worker worker) {
-        return DefaultPlayerSkin.get(worker.getUUID()).texture();
+        return WorkerSkins.resolve(worker).texture();
     }
 
     @Override
     public void render(Worker worker, float entityYaw, float partialTicks, PoseStack poseStack,
                        MultiBufferSource buffer, int packedLight) {
-        PlayerSkin skin = DefaultPlayerSkin.get(worker.getUUID());
-        this.model = skin.model() == PlayerSkin.Model.SLIM ? slimModel : wideModel;
+        WorkerSkins.Look skin = WorkerSkins.resolve(worker);
+        this.model = skin.slim() ? slimModel : wideModel;
         super.render(worker, entityYaw, partialTicks, poseStack, buffer, packedLight);
     }
 

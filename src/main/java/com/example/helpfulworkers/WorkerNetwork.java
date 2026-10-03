@@ -23,7 +23,9 @@ final class WorkerNetwork {
 
     @SubscribeEvent
     static void register(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("2");
+        PayloadRegistrar registrar = event.registrar("5");
+        SiteNetwork.register(registrar);
+        WorkerAppearanceNetwork.register(registrar);
         registrar.playToClient(OpenDialoguePayload.TYPE, OpenDialoguePayload.STREAM_CODEC, WorkerNetwork::handleOpenDialogue);
         registrar.playToClient(CloseDialoguePayload.TYPE, CloseDialoguePayload.STREAM_CODEC, WorkerNetwork::handleCloseDialogue);
         registrar.playToClient(WorkerStatusPayload.TYPE, WorkerStatusPayload.STREAM_CODEC, WorkerNetwork::handleStatus);
@@ -139,7 +141,8 @@ final class WorkerNetwork {
     }
 
     static void sendAreaOutline(ServerPlayer player, Worker worker, int ticks) {
-        PacketDistributor.sendToPlayer(player, AreaOutlinePayload.from(worker, ticks));
+        if (net.neoforged.neoforge.network.registration.NetworkRegistry.hasChannel(player.connection, AreaOutlinePayload.TYPE.id()))
+            PacketDistributor.sendToPlayer(player, AreaOutlinePayload.from(worker, ticks));
     }
 
     static void toast(ServerPlayer player, String message) {
@@ -149,7 +152,8 @@ final class WorkerNetwork {
     static void syncStatusToViewers(Worker worker) {
         WorkerStatusPayload payload = WorkerStatusPayload.from(worker);
         for (Player player : worker.level().players()) {
-            if (player instanceof ServerPlayer serverPlayer && WorkerSessions.hasDialogueOrInventory(serverPlayer, worker)) {
+            if (player instanceof ServerPlayer serverPlayer && WorkerSessions.hasDialogueOrInventory(serverPlayer, worker)
+                && net.neoforged.neoforge.network.registration.NetworkRegistry.hasChannel(serverPlayer.connection, WorkerStatusPayload.TYPE.id())) {
                 PacketDistributor.sendToPlayer(serverPlayer, payload);
             }
         }

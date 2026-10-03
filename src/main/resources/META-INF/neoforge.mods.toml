@@ -3,7 +3,7 @@ loaderVersion="[4,)"
 license="MIT"
 [[mods]]
 modId="helpfulworkers"
-version="0.3.1"
+version="0.5.3"
 displayName="Helpful Workers"
 description='''Assign helpful NPC workers to farms, forests, mines, and construction jobs.'''
 [[dependencies.helpfulworkers]]

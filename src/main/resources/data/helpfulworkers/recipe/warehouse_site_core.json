@@ -1,0 +1,20 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "CCC",
+    "CFC",
+    "CCC"
+  ],
+  "key": {
+    "C": {
+      "item": "minecraft:chest"
+    },
+    "F": {
+      "item": "helpfulworkers:site_frame"
+    }
+  },
+  "result": {
+    "id": "helpfulworkers:warehouse_site_core",
+    "count": 1
+  }
+}

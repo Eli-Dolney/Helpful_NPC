@@ -17,6 +17,12 @@ final class DialogueHandlers {
         String action = payload.action();
         String arg = payload.arg() == null ? "" : payload.arg();
         ActionResult result = switch (action) {
+            case "sites" -> {
+                ActionResult check = WorkerActions.requireMenu(player, worker);
+                if (check != null) yield check;
+                SiteUi.openWorker(player, worker);
+                yield ActionResult.ok("Worker sites opened");
+            }
             case "close" -> {
                 WorkerSessions.closeViewer(player);
                 yield ActionResult.ok("Goodbye");

@@ -63,6 +63,7 @@ final class Blueprints {
             BlockPos pos=new BlockPos(x0+x,y0+y,z0+z);
             if(!level.isLoaded(pos)) return "Blueprint area includes unloaded chunks";
             BlockState state=level.getBlockState(pos);
+            if (SiteBlocks.protectedBlock(state)) return "Worker sites cannot be copied";
             if(state.isAir()) continue;
             if(!state.getFluidState().isEmpty() || state.getBlock().asItem()==net.minecraft.world.item.Items.AIR)
                 return "Unsupported block at " + pos.toShortString();
@@ -216,6 +217,7 @@ final class Blueprints {
             };
             BlockState state = NbtUtils.readBlockState(BuiltInRegistries.BLOCK.asLookup(), entry.getCompound("State")).rotate(rotation);
             BlockState current = level.getBlockState(pos);
+            if (SiteBlocks.protectedBlock(state) || SiteBlocks.protectedBlock(current)) { worker.setStatus("Cannot copy or overwrite a worker site"); worker.working = false; return; }
             if (current.equals(state) || (state.isAir() && current.isAir())) { worker.scanCursor = i + 1; continue; }
             if (freePreset) {
                 // Village houses clear the plot as they go, but never destroy chests or other block entities.

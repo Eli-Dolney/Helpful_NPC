@@ -79,9 +79,11 @@ public final class HelpfulWorkers {
                 output.accept(SMELTER_KIT.get());
                 output.accept(COURIER_KIT.get());
                 output.accept(CLIPBOARD.get());
+                SiteBlocks.CORES.values().forEach(item -> output.accept(item.get()));
             }).build());
 
     public HelpfulWorkers(IEventBus bus, ModContainer container) {
+        SiteBlocks.BLOCKS.register(bus);
         ENTITIES.register(bus);
         ITEMS.register(bus);
         TABS.register(bus);
@@ -92,6 +94,7 @@ public final class HelpfulWorkers {
         WorkerSessions.register();
         WorkerRegistry.register();
         WorkerCombat.register();
+        SiteEvents.register();
     }
 
     private void attributes(EntityAttributeCreationEvent event) {

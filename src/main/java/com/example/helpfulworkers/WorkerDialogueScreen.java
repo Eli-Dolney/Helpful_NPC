@@ -18,7 +18,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 @OnlyIn(Dist.CLIENT)
 public final class WorkerDialogueScreen extends Screen {
     private enum Page {
-        MAIN, WORK, ROLE, LOCATIONS, RECIPES, BUILD, BLUEPRINT, ROLE_CONFIRM, CAPTURE_CONFIRM,
+        MAIN, MANAGE, WORK, ROLE, LOCATIONS, RECIPES, BUILD, BLUEPRINT, ROLE_CONFIRM, CAPTURE_CONFIRM,
         MESSAGE, DEPTH, PROTECT, CROPS, TARGET_Y, BIOME, RANCH, CULL_CONFIRM
     }
 
@@ -45,6 +45,8 @@ public final class WorkerDialogueScreen extends Screen {
     private final List<String> blueprints = new ArrayList<>();
     private final Set<String> flags = new HashSet<>();
     private int recipeScroll;
+    private int sectionPage, sectionPages = 1;
+    private Page lastPage;
     private String pendingCaptureName = "";
     private boolean suppressClosePacket;
 
@@ -135,11 +137,11 @@ public final class WorkerDialogueScreen extends Screen {
         rebuild();
     }
 
-    private int panelLeft() { return (this.width - 276) / 2; }
-    private int panelWidth() { return 276; }
-    private int panelHeight() { return Math.min(this.height - 16, 292); }
+    private int panelLeft() { return (this.width - panelWidth()) / 2; }
+    private int panelWidth() { return Math.min(360, this.width - 16); }
+    private int panelHeight() { return Math.min(this.height - 16, page == Page.MAIN || page == Page.MANAGE ? 230 : 350); }
     private int panelTop() { return Math.max(8, (this.height - panelHeight()) / 2); }
-    private int contentTop() { return panelTop() + 62; }
+    private int contentTop() { return panelTop() + 100; }
     private int contentBottom() { return panelTop() + panelHeight() - 28; }
 
     private void ensureTextBoxes(int left) {
@@ -149,6 +151,7 @@ public final class WorkerDialogueScreen extends Screen {
             searchBox.setResponder(text -> {
                 if (page == Page.RECIPES) {
                     recipeScroll = 0;
+                    sectionPage = 0;
                     rebuild();
                 }
             });
@@ -166,8 +169,10 @@ public final class WorkerDialogueScreen extends Screen {
     }
 
     private void rebuild() {
+        boolean restoreSearchFocus = searchBox != null && searchBox.isFocused();
         clearWidgets();
-        int left = panelLeft();
+        if (lastPage != page) { sectionPage = 0; lastPage = page; }
+        int left = panelLeft() + (panelWidth() - 276) / 2;
         int top = panelTop();
         if (page == Page.RECIPES || page == Page.BUILD || page == Page.CAPTURE_CONFIRM || page == Page.BLUEPRINT) {
             ensureTextBoxes(left);
@@ -175,6 +180,7 @@ public final class WorkerDialogueScreen extends Screen {
 
         switch (page) {
             case MAIN -> buildMain(left, top);
+            case MANAGE -> buildManage(left, top);
             case WORK -> buildWork(left, top);
             case ROLE -> buildRole(left, top);
             case LOCATIONS -> buildLocations(left, top);
@@ -192,53 +198,47 @@ public final class WorkerDialogueScreen extends Screen {
             case RANCH -> buildRanch(left, top);
             case CULL_CONFIRM -> buildCullConfirm(left, top);
         }
+        finishLayout();
+        if (restoreSearchFocus && page == Page.RECIPES) setFocused(searchBox);
     }
 
     private void buildMain(int left, int top) {
         int y = contentTop();
-        choice(left + 12, y, "Let's talk about your work", b -> { page = Page.WORK; rebuild(); });
-        y += 24;
-        if (WorkerActions.isCombatRole(role)) {
-            choice(left + 12, y, "Let's talk about protection", b -> { page = Page.PROTECT; rebuild(); });
-            y += 24;
-        }
-        if ("farmer".equals(role)) {
-            choice(left + 12, y, "Let's choose crops", b -> { page = Page.CROPS; rebuild(); });
-            y += 24;
-        }
-        if ("rancher".equals(role)) {
-            choice(left + 12, y, "Ranch settings", b -> { page = Page.RANCH; rebuild(); });
-            y += 24;
-            choice(left + 12, y, "Thin herd to 2 each…", b -> { page = Page.CULL_CONFIRM; rebuild(); });
-            y += 24;
-        }
-        choice(left + 12, y, "Let me show you where", b -> { page = Page.LOCATIONS; rebuild(); });
-        y += 24;
-        choice(left + 12, y, "Show my work area", b -> send("show_outline", ""));
-        y += 24;
-        choice(left + 12, y, "Let's check your equipment", b -> send("open_inventory", ""));
-        y += 24;
-        if ("builder".equals(role) || "miner".equals(role) || "farmer".equals(role) || "forester".equals(role)) {
-            choice(left + 12, y, "Let me teach you a recipe", b -> {
-                page = Page.RECIPES; recipeScroll = 0; send("request_recipes", ""); rebuild();
-            });
-            y += 24;
-        }
-        if ("builder".equals(role)) {
-            choice(left + 12, y, "Build a village house", b -> { page = Page.BUILD; rebuild(); });
-            y += 24;
-            choice(left + 12, y, "Custom blueprints", b -> {
-                page = Page.BLUEPRINT;
-                send("request_recipes", ""); // keep session warm; blueprints come with open
-                rebuild();
-            });
-            y += 24;
-        }
-        choice(left + 12, y, "Goodbye", b -> { send("close", ""); onClose(); });
+        choice(left + 12, y, "builder".equals(role) ? "Build a worker site" : flags.contains("site") ? "Manage assigned " + siteName() : "Assign a " + siteName(), b -> send("sites", ""));
+        choice(left + 12, y + 24, "builder".equals(role) ? "Construction projects" : jobTab() + " settings", b -> { page=Page.WORK; rebuild(); });
+        choice(left + 12, y + 48, "Equipment & inventory", b -> send("open_inventory", ""));
+        choice(left + 12, y + 72, working ? "Pause work" : "Resume work", b -> send(working ? "pause" : "start", ""));
     }
 
+    private void buildManage(int left, int top) {
+        int y=contentTop();
+        choice(left+12,y,"Name & appearance",b->{
+            if(minecraft.level != null && minecraft.level.getEntity(workerId) instanceof Worker worker)
+                minecraft.setScreen(new WorkerAppearanceScreen(worker,this));
+        }); y+=24;
+        choice(left+12,y,"Change profession",b->{page=Page.ROLE;rebuild();}); y+=24;
+        if (java.util.Set.of("builder","miner","farmer","forester").contains(role)) {
+            choice(left+12,y,"Crafting recipes",b->{page=Page.RECIPES;recipeScroll=0;send("request_recipes","");rebuild();});y+=24;
+        }
+        choice(left+12,y,"Return to assigned bed",b->send("home",""));
+    }
+
+    private String jobTab() {
+        return switch(role) {
+            case "miner"->"Mining";case "forester"->"Logging";case "farmer"->"Farming";
+            case "builder"->"Building";case "rancher"->"Ranching";case "fisher"->"Fishing";
+            case "smelter"->"Smelting";case "courier"->"Deliveries";default->"Protection";
+        };
+    }
+    private String siteName() {
+        return switch(role) {
+            case "miner"->"mining pit";case "forester"->"logging camp";case "farmer"->"crop farm";
+            case "builder"->"worker site";case "rancher"->"ranch";case "fisher"->"fishing pond";
+            case "smelter"->"smelter workshop";case "courier"->"warehouse";default->"guard tower";
+        };
+    }
     private void choice(int x, int y, String label, Button.OnPress press) {
-        addRenderableWidget(Button.builder(Component.literal(label), press).bounds(x, y, 252, 20).build());
+        addRenderableWidget(Button.builder(Component.literal(label),press).bounds(x,y,252,20).build());
     }
 
     private void checkbox(int x, int y, String flag, String label, String action, String arg) {
@@ -250,18 +250,41 @@ public final class WorkerDialogueScreen extends Screen {
 
     private void buildWork(int left, int top) {
         int y = contentTop();
+        if (flags.contains("site")) {
+            choice(left + 12, y, "Manage " + siteName(), b -> send("sites", "")); y+=24;
+            choice(left + 12, y, working ? "Pause work" : "Resume work", b -> send(working ? "pause" : "start", "")); y+=24;
+            if(role.equals("farmer"))choice(left+12,y,"Crops & bone meal",b->{page=Page.CROPS;rebuild();});
+            if(role.equals("rancher"))choice(left+12,y,"Animals & products",b->{page=Page.RANCH;rebuild();});
+            if(role.equals("builder")) {
+                choice(left+12,y,"Build another worker site",b->send("sites",""));
+                choice(left+12,y+24,"Custom blueprints",b->{page=Page.BLUEPRINT;rebuild();});
+            }
+            return;
+        }
         addRenderableWidget(Button.builder(Component.literal(working ? "Pause work" : "Start work"),
             b -> send(working ? "pause" : "start", "")).bounds(left + 12, y, 122, 20).build());
         addRenderableWidget(Button.builder(Component.literal("Return home"), b -> send("home", ""))
             .bounds(left + 142, y, 122, 20).build());
         y += 24;
-        addRenderableWidget(Button.builder(Component.literal("Cancel dig site"), b -> send("clear_assign", "area"))
-            .bounds(left + 12, y, 122, 20).build());
-        addRenderableWidget(Button.builder(Component.literal("Redraw dig site"), b -> send("redraw_area", ""))
-            .bounds(left + 142, y, 122, 20).build());
-        y += 28;
-        choice(left + 12, y, "Change job…", b -> { page = Page.ROLE; rebuild(); });
-        y += 28;
+        if (!java.util.Set.of("builder","courier","smelter").contains(role)) {
+            choice(left+12,y,(hasArea ? "Redraw " : "Mark ") + workAreaLabel().toLowerCase(Locale.ROOT),b->send("redraw_area",""));y+=24;
+            if(hasArea) { choice(left+12,y,"Show " + workAreaLabel().toLowerCase(Locale.ROOT),b->send("show_outline",""));y+=24; }
+        }
+        switch(role) {
+            case "farmer" -> { choice(left+12,y,"Crops & bone meal",b->{page=Page.CROPS;rebuild();}); y+=24; }
+            case "rancher" -> {
+                choice(left+12,y,"Animals & products",b->{page=Page.RANCH;rebuild();});y+=24;
+                choice(left+12,y,"Manage herd size…",b->{page=Page.CULL_CONFIRM;rebuild();});y+=24;
+            }
+            case "knight", "archer" -> {choice(left+12,y,"Guard / follow / stay",b->{page=Page.PROTECT;rebuild();});y+=24;}
+            case "builder" -> {
+                choice(left+12,y,"Build a worker site",b->send("sites",""));y+=24;
+                choice(left+12,y,"Village houses",b->{page=Page.BUILD;rebuild();});y+=24;
+                choice(left+12,y,"Custom blueprints",b->{page=Page.BLUEPRINT;send("request_recipes","");rebuild();});y+=24;
+            }
+            case "courier" -> {choice(left+12,y,"Warehouse & delivery settings",b->send("sites",""));y+=24;}
+            case "smelter" -> {choice(left+12,y,"Furnaces & storage",b->{page=Page.LOCATIONS;rebuild();});y+=24;}
+        }
         if ("miner".equals(role)) {
             String[] modes = {"excavate", "branches", "terraform", "staircase", "strip", "colony"};
             String[] labels = {"Excavate", "Branches", "Terraform", "Staircase", "Strip", "Colony"};
@@ -399,6 +422,11 @@ public final class WorkerDialogueScreen extends Screen {
 
     private void buildLocations(int left, int top) {
         int y = contentTop();
+        if(flags.contains("site")) {
+            y=assignRow(left,y,"Bed","bed",hasBed);
+            choice(left+12,y,"Site settings / release to use zones",b->send("sites",""));
+            addBack(left,y+28);return;
+        }
         if ("knight".equals(role) || "archer".equals(role)) {
             y = assignRow(left, y, "Guard area", "area", hasArea);
             y = assignRow(left, y, "Bed", "bed", hasBed);
@@ -445,20 +473,23 @@ public final class WorkerDialogueScreen extends Screen {
             case "miner" -> "Mine area";
             case "rancher" -> "Animal pen";
             case "fisher" -> "Fishing area";
+            case "knight", "archer" -> "Guard area";
             default -> "Work area";
         };
     }
 
     private int assignRow(int left, int y, String label, String kind, boolean set) {
-        String prefix = set ? "● " : "○ ";
-        addRenderableWidget(Button.builder(Component.literal(prefix + (set ? "Change " : "Assign ") + label),
-            b -> send("start_assign", kind)).bounds(left + 12, y, 176, 20).build());
-        addRenderableWidget(Button.builder(Component.literal("Clear"), b -> {
+        WorkerIcons.Kind icon = kind.equals("bed") ? WorkerIcons.Kind.BED
+            : kind.equals("area") ? WorkerIcons.Kind.AREA : kind.equals("table") ? WorkerIcons.Kind.TABLE : WorkerIcons.Kind.CHEST;
+        addRenderableWidget(WorkerIcons.button(left + 12, y, 176, (set ? "Change " : "Assign ") + label,
+            icon, kind.equals("bed") ? 0xff79b8e8 : 0xffd7b773, b -> send("start_assign", kind)));
+        var clear=addRenderableWidget(Button.builder(Component.literal("Clear"), b -> {
             if (!set) {
                 infoMessage = label + " is not assigned yet.";
                 page = Page.MESSAGE; rebuild();
             } else send("clear_assign", kind);
         }).bounds(left + 194, y, 70, 20).build());
+        clear.active=set;
         return y + 24;
     }
 
@@ -473,8 +504,6 @@ public final class WorkerDialogueScreen extends Screen {
         for (WorkerNetwork.RecipeEntry entry : recipes) {
             if (!query.isEmpty() && !entry.outputName().toLowerCase(Locale.ROOT).contains(query)
                 && !entry.id().toLowerCase(Locale.ROOT).contains(query)) continue;
-            if (skipped++ < recipeScroll) continue;
-            if (shown >= 5) break;
             String prefix = entry.approved() ? "[OK] " : entry.supported() ? "[ ] " : "[X] ";
             String text = prefix + entry.outputName();
             WorkerNetwork.RecipeEntry captured = entry;
@@ -489,13 +518,10 @@ public final class WorkerDialogueScreen extends Screen {
             y += 22;
             shown++;
         }
-        addRenderableWidget(Button.builder(Component.literal("Up"), b -> {
-            recipeScroll = Math.max(0, recipeScroll - 5); rebuild();
-        }).bounds(left + 12, y, 70, 20).build());
-        addRenderableWidget(Button.builder(Component.literal("Down"), b -> {
-            recipeScroll += 5; rebuild();
-        }).bounds(left + 88, y, 70, 20).build());
-        addBack(left + 164, y);
+        if (shown == 0) {
+            var empty=Button.builder(Component.literal("No matching recipes"),b->{}).bounds(left+12,y,252,20).build();
+            empty.active=false;addRenderableWidget(empty);
+        }
     }
 
     private void buildBuild(int left, int top) {
@@ -519,7 +545,7 @@ public final class WorkerDialogueScreen extends Screen {
         }
         java.util.List<VillageCatalog.Entry> presets = VillageCatalog.forBiome(villageBiome);
         int shown = 0;
-        for (int i = 0; i < presets.size() && shown < 6; i++) {
+        for (int i = 0; i < presets.size(); i++) {
             VillageCatalog.Entry entry = presets.get(i);
             String preset = entry.id();
             String label = (preset.equals(blueprint) ? "● " : "") + trim(entry.label(), 18);
@@ -594,14 +620,13 @@ public final class WorkerDialogueScreen extends Screen {
         int shown = 0;
         for (String name : blueprints) {
             if (BuilderPresets.isPreset(name)) continue;
-            if (shown >= 3) break;
             String label = (name.equals(blueprint) ? "● " : "") + name;
             addRenderableWidget(Button.builder(Component.literal("Load " + trim(label, 24)), b -> send("load_blueprint", name))
                 .bounds(left + 12, y, 252, 20).build());
             y += 22;
             shown++;
         }
-        addBack(left, Math.min(y, contentBottom()));
+        addBack(left, y);
     }
 
     private void buildDepth(int left, int top) {
@@ -658,6 +683,78 @@ public final class WorkerDialogueScreen extends Screen {
     private void addBack(int left, int y) {
         addRenderableWidget(Button.builder(Component.literal("Back"), b -> { page = Page.MAIN; rebuild(); })
             .bounds(left + 12, y, 252, 20).build());
+    }
+
+    private String sectionHint() {
+        return switch(page) {
+            case MAIN -> flags.contains("site") ? "Assigned site • bounds and storage are automatic" : "Choose a site, or configure ordinary " + jobTab().toLowerCase(Locale.ROOT) + ".";
+            case WORK -> flags.contains("site") ? "Your " + siteName() + " handles the work area." : "Configure " + jobTab().toLowerCase(Locale.ROOT) + " for this worker.";
+            case LOCATIONS -> "Use the clipboard to assign beds, storage and work locations.";
+            case MANAGE -> "Personalize your worker or change their profession.";
+            case ROLE, ROLE_CONFIRM -> page==Page.ROLE ? "Choose a profession. Survival requires its role kit." : "Assign " + WorkerActions.roleLabel(pendingRole) + "? The matching kit is required, but not consumed.";
+            case CAPTURE_CONFIRM -> "Overwrite saved blueprint: " + pendingCaptureName + "?";
+            case MESSAGE -> infoMessage;
+            case DEPTH -> "Choose depth for the marked mining area.";
+            case BUILD -> "Select a house style, then mark a plot of at least 10 × 10.";
+            case BLUEPRINT -> "Name, capture, preview, then build your custom structure.";
+            case RECIPES -> "Select a recipe to teach it; select a taught recipe to forget it.";
+            case CROPS -> "Choose which crops to grow and whether to use bone meal.";
+            case RANCH -> "Choose animals, breeding and the products to collect.";
+            case CULL_CONFIRM -> "Keep two adults of each enabled species; harvest the rest.";
+            case PROTECT -> "Choose a guard post, follow mode or a fixed position.";
+            case TARGET_Y -> "Set the destination height for your mining operation.";
+            case BIOME -> "Choose the architectural style for village houses.";
+        };
+    }
+
+    /** Keep whole rows together so controls remain reachable at every GUI scale. */
+    private void finishLayout() {
+        var widgets=children().stream().filter(e->e instanceof net.minecraft.client.gui.components.AbstractWidget)
+                .map(e->(net.minecraft.client.gui.components.AbstractWidget)e).toList();
+        var rows=new java.util.TreeMap<Integer,List<net.minecraft.client.gui.components.AbstractWidget>>();
+        for(var widget:widgets)if(page!=Page.RECIPES || widget!=searchBox)rows.computeIfAbsent(widget.getY(),k->new ArrayList<>()).add(widget);
+        var pages=new ArrayList<List<net.minecraft.client.gui.components.AbstractWidget>>();
+        var current=new ArrayList<net.minecraft.client.gui.components.AbstractWidget>();pages.add(current);
+        int start=contentTop()+(page==Page.RECIPES?24:0), y=start;
+        for(var row:rows.values()) {
+            int h=row.stream().mapToInt(w->w.getHeight()).max().orElse(20);
+            if(y+h>contentBottom() && !current.isEmpty()) {current=new ArrayList<>();pages.add(current);y=start;}
+            for(var widget:row) {widget.setY(y);current.add(widget);}y+=h+4;
+        }
+        sectionPages=pages.size();sectionPage=Math.min(sectionPage,sectionPages-1);
+        clearWidgets();
+        if(page==Page.RECIPES) {searchBox.setY(contentTop());addRenderableWidget(searchBox);}
+        for(var widget:pages.get(sectionPage)) {
+            if(widget instanceof Button old) {
+                String label=old.getMessage().getString();
+                boolean selected=label.startsWith("● ") || label.startsWith("[✓] ") || page==Page.RECIPES && label.startsWith("[OK] ");
+                String caption=label.startsWith("● ")?label.substring(2):label.startsWith("[✓] ")?"On · "+label.substring(4):label.startsWith("[ ] ")?"Off · "+label.substring(4):label;
+                if(page==Page.RECIPES)caption=label.startsWith("[OK] ")?"Taught: "+label.substring(5):label.startsWith("[ ] ")?"Learn: "+label.substring(4):label.startsWith("[X] ")?"Unavailable: "+label.substring(4):label;
+                var button=WorkerUi.button(old.getX(),old.getY(),old.getWidth(),old.getHeight(),caption,
+                        old.getWidth()>=170 || page==Page.ROLE?WorkerUi.icon(label):null,selected,b->old.onPress());
+                button.active=old.active;addRenderableWidget(button);
+            } else addRenderableWidget(widget);
+        }
+        Page selected=switch(page) {
+            case MAIN->Page.MAIN;case LOCATIONS->Page.LOCATIONS;
+            case MANAGE,ROLE,ROLE_CONFIRM,RECIPES->Page.MANAGE;default->Page.WORK;
+        };
+        String[] names={"Overview",jobTab(),"Locations","Manage"};Page[] targets={Page.MAIN,Page.WORK,Page.LOCATIONS,Page.MANAGE};
+        int x=panelLeft()+12,tw=(panelWidth()-33)/4;
+        for(int i=0;i<4;i++) {
+            Page target=targets[i];addRenderableWidget(WorkerUi.button(x+i*(tw+3),panelTop()+56,tw,20,names[i],null,selected==target,b->{page=target;rebuild();}));
+        }
+        int fy=panelTop()+panelHeight()-24;
+        if(sectionPages>1) {
+            var previous=WorkerUi.button(x,fy,78,18,"< Previous",null,false,b->{sectionPage--;rebuild();});previous.active=sectionPage>0;addRenderableWidget(previous);
+            var next=WorkerUi.button(panelLeft()+panelWidth()-90,fy,78,18,"Next >",null,false,b->{sectionPage++;rebuild();});next.active=sectionPage<sectionPages-1;addRenderableWidget(next);
+        }
+        addRenderableWidget(WorkerUi.button(panelLeft()+panelWidth()-29,panelTop()+10,18,18,"×",null,false,b->onClose()));
+    }
+
+    @Override public boolean mouseScrolled(double x,double y,double sx,double sy) {
+        int next=Math.max(0,Math.min(sectionPages-1,sectionPage-(int)Math.signum(sy)));
+        if(next!=sectionPage){sectionPage=next;rebuild();return true;}return super.mouseScrolled(x,y,sx,sy);
     }
 
     private static String trim(String text, int max) {
@@ -718,14 +815,14 @@ public final class WorkerDialogueScreen extends Screen {
         ResourceLocation skin = PORTRAIT;
         if (minecraft != null && minecraft.level != null) {
             var entity = minecraft.level.getEntity(workerId);
-            if (entity != null) {
-                skin = net.minecraft.client.resources.DefaultPlayerSkin.get(entity.getUUID()).texture();
+            if (entity instanceof Worker worker) {
+                skin = WorkerSkins.resolve(worker).texture();
                 graphics.blit(skin, x, y, 36, 36, 8, 8, 8, 8, 64, 64);
                 graphics.blit(skin, x, y, 36, 36, 40, 8, 8, 8, 64, 64);
                 return;
             }
         }
-        graphics.blit(PORTRAIT, x, y, 0, 0, 36, 36, 32, 32);
+        graphics.blit(ResourceLocation.withDefaultNamespace("textures/entity/player/wide/steve.png"),x,y,36,36,8,8,8,8,64,64);
     }
 
     private void send(String action, String arg) {
@@ -739,48 +836,24 @@ public final class WorkerDialogueScreen extends Screen {
         int top = panelTop();
         int right = left + panelWidth();
         int bottom = top + panelHeight();
-        graphics.fill(left - 2, top - 2, right + 2, bottom + 2, 0xFF1A1A1A);
-        graphics.fill(left, top, right, bottom, 0xF0181C22);
-        graphics.fill(left, top, right, top + 3, roleColor());
+        WorkerUi.frame(graphics,left,top,panelWidth(),panelHeight());
         graphics.fill(left + 8, top + 10, left + 44, top + 46, 0xFF101318);
         drawWorkerFace(graphics, left + 8, top + 10);
         graphics.blit(roleIcon(), left + 46, top + 10, 0, 0, 16, 16, 16, 16);
-        graphics.drawString(font, trim(workerName, 26), left + 66, top + 12, 0xFFFFFF, false);
+        graphics.drawString(font, font.plainSubstrByWidth(workerName,panelWidth()-103), left + 66, top + 12, 0xFFFFFF, false);
         String duty = WorkerActions.roleLabel(role) + (working ? "  ·  working" : "  ·  paused");
         graphics.drawString(font, duty, left + 66, top + 24, roleColor(), false);
         String line = greeting();
-        if (font.width(line) > 190) line = font.plainSubstrByWidth(line, 190) + "…";
+        if (font.width(line) > panelWidth()-72) line = font.plainSubstrByWidth(line, panelWidth()-78) + "…";
         graphics.drawString(font, "“" + line + "”", left + 50, top + 36, 0xFFE7D7B0, false);
-        if (page == Page.ROLE_CONFIRM) {
-            graphics.drawWordWrap(font, Component.literal("Assign " + WorkerActions.roleLabel(pendingRole)
-                + "? Survival needs the matching kit. The kit is not used up."), left + 12, contentTop(), 252, 0xFFFFFFFF);
-        } else if (page == Page.CAPTURE_CONFIRM) {
-            graphics.drawWordWrap(font, Component.literal("Overwrite the saved blueprint \"" + pendingCaptureName + "\"?"),
-                left + 12, contentTop(), 252, 0xFFFFFFFF);
-        } else if (page == Page.MESSAGE) {
-            graphics.drawWordWrap(font, Component.literal(infoMessage), left + 12, contentTop(), 252, 0xFFFF8A80);
-        } else if (page == Page.DEPTH) {
-            graphics.drawWordWrap(font, Component.literal("How deep should this dig go? The length and width are already marked."),
-                left + 12, contentTop() - 8, 252, 0xFFE7D7B0);
-        } else if (page == Page.CULL_CONFIRM) {
-            graphics.drawWordWrap(font, Component.literal(
-                "Thin enabled animals down to the last 2 adults of each kind. Do you have a Looting sword I can borrow?"),
-                left + 12, contentTop(), 252, 0xFFE7D7B0);
-        } else if (page == Page.ROLE) {
-            graphics.drawWordWrap(font, Component.literal("Pick a new job. Survival needs the matching kit."),
-                left + 12, contentTop() - 14, 252, 0xFFE7D7B0);
-        } else if (page == Page.BUILD) {
-            graphics.drawWordWrap(font, Component.literal("Pick a house (optional), mark a 10×10+ plot, and the builder builds it for free."),
-                left + 12, contentTop() - 2, 252, 0xFFE7D7B0);
-        } else if (page == Page.BLUEPRINT) {
-            graphics.drawWordWrap(font, Component.literal("Copy a structure, check materials, place the spot, then build one block at a time."),
-                left + 12, contentTop() - 2, 252, 0xFFE7D7B0);
-        } else if (page == Page.RECIPES) {
-            graphics.drawString(font, "● taught    ○ available    × not supported", left + 12, contentTop() + 18, 0xFF90A4AE, false);
-        } else if (page == Page.LOCATIONS) {
-            graphics.drawString(font, "● assigned    ○ open", left + 12, contentTop() - 12, 0xFF90A4AE, false);
-        }
-        super.render(graphics, mouseX, mouseY, partialTick);
+        String hint = sectionHint();
+        graphics.drawString(font,font.plainSubstrByWidth(hint,panelWidth()-24),left+12,top+83,WorkerUi.MUTED,false);
+        if(mouseX>=left+12 && mouseX<right-12 && mouseY>=top+80 && mouseY<top+96)
+            graphics.renderTooltip(font,font.split(Component.literal(hint),260),mouseX,mouseY);
+        if(mouseX>=left+50 && mouseX<right-24 && mouseY>=top+34 && mouseY<top+47)
+            graphics.renderTooltip(font,font.split(Component.literal(greeting()),260),mouseX,mouseY);
+        for (var widget : renderables) widget.render(graphics, mouseX, mouseY, partialTick);
+        graphics.drawCenteredString(font,sectionPages>1 ? "Page " + (sectionPage+1) + " / " + sectionPages : "Esc to close",width/2,bottom-19,WorkerUi.MUTED);
     }
 
     @Override

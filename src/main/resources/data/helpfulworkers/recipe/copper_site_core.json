@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    {
+      "item": "helpfulworkers:mining_core"
+    },
+    {
+      "item": "minecraft:copper_block"
+    }
+  ],
+  "result": {
+    "id": "helpfulworkers:copper_site_core",
+    "count": 1
+  }
+}

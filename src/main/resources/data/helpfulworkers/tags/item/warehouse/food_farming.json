@@ -1,0 +1,23 @@
+{
+  "replace": false,
+  "values": [
+    "#minecraft:small_flowers",
+    "#minecraft:saplings",
+    "minecraft:wheat",
+    "minecraft:wheat_seeds",
+    "minecraft:beetroot_seeds",
+    "minecraft:carrot",
+    "minecraft:potato",
+    "minecraft:beetroot",
+    "minecraft:apple",
+    "minecraft:bread",
+    "minecraft:cod",
+    "minecraft:salmon",
+    "minecraft:beef",
+    "minecraft:cooked_beef",
+    "minecraft:chicken",
+    "minecraft:egg",
+    "minecraft:sugar_cane",
+    "minecraft:bone_meal"
+  ]
+}

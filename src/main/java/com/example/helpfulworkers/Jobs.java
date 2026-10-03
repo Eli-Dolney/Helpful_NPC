@@ -34,6 +34,7 @@ final class Jobs {
 
     static void tick(ServerLevel level, Worker worker) {
         try {
+            if (SiteJobs.tick(level, worker)) { worker.markWorkFound(); return; }
             if ("builder".equals(worker.role)) { Blueprints.tick(level, worker); worker.markWorkFound(); return; }
             if ("smelter".equals(worker.role)) { ExtraJobs.smelter(level, worker); return; }
             if ("courier".equals(worker.role)) {
@@ -864,6 +865,11 @@ final class Jobs {
             for (int i = 0; i < chest.getContainerSize(); i++) {
                 ItemStack stack = chest.getItem(i);
                 if (type.isInstance(stack.getItem())) {
+                    if(worker.siteId!=null && !worker.approach(worker.supply))return false;
+                    if(!worker.getMainHandItem().isEmpty()) {
+                        if(StorageOps.capacity(worker.bag,worker.getMainHandItem())<worker.getMainHandItem().getCount())return false;
+                        worker.bag.addItem(worker.getMainHandItem().copy());
+                    }
                     worker.setItemSlot(EquipmentSlot.MAINHAND, chest.removeItem(i, 1));
                     chest.setChanged();
                     return true;
@@ -910,30 +916,11 @@ final class Jobs {
             worker.status = "Returning loot to chest";
             return false;
         }
-        BlockEntity entity = level.getBlockEntity(worker.output);
-        if (!(entity instanceof Container chest)) { worker.status = "Output chest missing"; return false; }
+        Container chest = StorageOps.at(level, worker.output);
+        if (chest == null) { worker.status = "Output chest missing"; return false; }
         for (int i = 0; i < worker.bag.getContainerSize(); i++) {
-            ItemStack stack = worker.bag.getItem(i);
-            if (stack.isEmpty() || isTool(stack)) continue;
-            int depositLimit = stack.getCount();
-            if (stack.is(ItemTags.SAPLINGS)) {
-                int total = countItem(worker, stack.getItem());
-                int excess = total - SAPLING_RESERVE;
-                if (excess <= 0) continue;
-                depositLimit = Math.min(stack.getCount(), excess);
-            }
-            ItemStack moving = stack.copyWithCount(depositLimit);
-            for (int j = 0; j < chest.getContainerSize() && !moving.isEmpty(); j++) {
-                ItemStack slot = chest.getItem(j);
-                if (slot.isEmpty()) { chest.setItem(j, moving.copy()); moving.setCount(0); break; }
-                if (ItemStack.isSameItemSameComponents(slot, moving) && slot.getCount() < slot.getMaxStackSize()) {
-                    int moved = Math.min(moving.getCount(), slot.getMaxStackSize() - slot.getCount());
-                    slot.grow(moved);
-                    moving.shrink(moved);
-                }
-            }
-            stack.shrink(depositLimit - moving.getCount());
-            if (stack.isEmpty()) worker.bag.setItem(i, ItemStack.EMPTY);
+            int limit = StorageOps.exportable(worker, i);
+            if (limit > 0) StorageOps.move(worker.bag, i, chest, limit);
         }
         chest.setChanged();
         if (bagFull(worker)) {
