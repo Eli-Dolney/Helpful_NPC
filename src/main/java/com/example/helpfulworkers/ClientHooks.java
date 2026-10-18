@@ -11,17 +11,6 @@ import net.neoforged.api.distmarker.OnlyIn;
 final class ClientHooks {
     private ClientHooks() {}
 
-    static void appearanceResult(WorkerAppearanceNetwork.Result result) {
-        if (Minecraft.getInstance().screen instanceof WorkerAppearanceScreen screen) screen.result(result);
-    }
-
-    static void openSite(SiteNetwork.Menu menu) {
-        Minecraft mc = Minecraft.getInstance();
-        if (menu.revision() < 0) { if (mc.screen instanceof SiteScreen) mc.setScreen(null); return; }
-        if (mc.screen instanceof SiteScreen screen) screen.update(menu);
-        else mc.setScreen(new SiteScreen(menu));
-    }
-
     static void openDialogue(WorkerNetwork.OpenDialoguePayload payload) {
         Minecraft.getInstance().setScreen(new WorkerDialogueScreen(payload));
     }
@@ -41,8 +30,6 @@ final class ClientHooks {
     static void updateStatus(WorkerNetwork.WorkerStatusPayload payload) {
         if (Minecraft.getInstance().screen instanceof WorkerDialogueScreen dialogue) {
             dialogue.applyStatus(payload);
-        } else if (Minecraft.getInstance().screen instanceof WorkerAppearanceScreen appearance) {
-            appearance.forwardStatus(payload);
         }
     }
 
@@ -68,10 +55,10 @@ final class ClientHooks {
         AreaOutlineClient.show(payload);
     }
 
-    static void toast(String message) {
+    static void toast(Component message) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null) {
-            mc.player.displayClientMessage(Component.literal(message), true);
+            mc.player.displayClientMessage(message, true);
         }
     }
 }

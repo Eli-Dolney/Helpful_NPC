@@ -5,7 +5,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundSource;
-import net.minecraft.tags.ItemTags;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.entity.animal.Chicken;
@@ -18,7 +17,9 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ShearsItem;
-import net.minecraft.world.level.block.AbstractFurnaceBlock;
+import net.minecraft.world.item.crafting.AbstractCookingRecipe;
+import net.minecraft.world.item.crafting.RecipeType;
+import net.minecraft.world.item.crafting.SingleRecipeInput;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -30,20 +31,20 @@ import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
-/** Jobs for rancher, fisher, smelter, courier. */
+/** Jobs for rancher (incl. beekeeping), fisher, smelter, courier, and the furnace feeding they share. */
 final class ExtraJobs {
     private ExtraJobs() {}
 
     static void rancher(ServerLevel level, Worker worker) {
         Worker.AreaBounds box = worker.areaBounds();
-        if (box == null) { worker.setStatus("Set a pen area"); worker.markIdle(); return; }
+        if (box == null) { worker.setStatusKey(Lang.STATUS_SET_PEN_AREA); worker.markIdle(); return; }
         AABB area = new AABB(box.minX(), box.minY() - 1, box.minZ(), box.maxX() + 1, box.maxY() + 3, box.maxZ() + 1);
 
         if (worker.culling) {
             if (tryCull(level, worker, area)) return;
             WorkerActions.returnBorrowedSword(worker);
             worker.culling = false;
-            worker.setStatus("Herd thinned to 2 each");
+            worker.setStatusKey(Lang.STATUS_HERD_THINNED);
             worker.markWorkFound();
             return;
         }
@@ -54,7 +55,7 @@ final class ExtraJobs {
                     if (!worker.approach(drop.blockPosition())) return;
                     worker.collect(drop.getItem().copy());
                     drop.discard();
-                    worker.setStatus("Collected eggs");
+                    worker.setStatusKey(Lang.STATUS_COLLECTED_EGGS);
                     worker.markWorkFound();
                     return;
                 }
@@ -77,11 +78,13 @@ final class ExtraJobs {
                 }
                 level.playSound(null, s.blockPosition(), net.minecraft.sounds.SoundEvents.SHEEP_SHEAR,
                     SoundSource.PLAYERS, 1.0f, 1.0f);
-                worker.setStatus("Sheared sheep");
+                worker.setStatusKey(Lang.STATUS_SHEARED_SHEEP);
                 worker.markWorkFound();
                 return;
             }
         }
+
+        if (worker.ranchHoney && tryHarvestHoney(level, worker, box)) return;
 
         if (worker.ranchMilk && worker.ranchAnimals.contains("cow")) {
             List<Cow> cows = level.getEntitiesOfClass(Cow.class, area, c -> !c.isBaby());
@@ -90,7 +93,7 @@ final class ExtraJobs {
                 if (!worker.approach(cow.blockPosition())) return;
                 if (Jobs.take(level, worker, new ItemStack(Items.BUCKET))) {
                     worker.collect(new ItemStack(Items.MILK_BUCKET));
-                    worker.setStatus("Milked cow");
+                    worker.setStatusKey(Lang.STATUS_MILKED_COW);
                     worker.markWorkFound();
                     return;
                 }
@@ -106,8 +109,80 @@ final class ExtraJobs {
             }
         }
 
-        worker.setStatus("Pen quiet — watching animals");
+        worker.setStatusKey(Lang.STATUS_PEN_QUIET);
         worker.markIdle();
+    }
+
+    // ---------------------------------------------------------------- beekeeping
+
+    /** Blocks above the pen that are still searched for hives (hives sit on fences and trees). */
+    private static final int HIVE_HEADROOM = 3;
+
+    /**
+     * Bottle or shear a full hive in the pen, but only when a lit campfire smokes it from within
+     * five blocks below (the vanilla rule that keeps the bees calm). Bottles come first, then
+     * shears; either is fetched from the supply chest on foot when the bag has none. True while busy.
+     */
+    private static boolean tryHarvestHoney(ServerLevel level, Worker worker, Worker.AreaBounds box) {
+        BlockPos hive = findFullHive(level, worker, box);
+        if (hive == null) return false;
+        boolean bottles = countItem(worker, Items.GLASS_BOTTLE) > 0;
+        boolean shears = Jobs.toolAvailable(worker, ShearsItem.class);
+        if (!bottles && !shears) {
+            ItemStack bottle = new ItemStack(Items.GLASS_BOTTLE);
+            if (Jobs.fetchFromSupply(level, worker, Jobs.itemKey(bottle), s -> s.is(Items.GLASS_BOTTLE),
+                1, Jobs.FETCH_BATCH, "glass bottles", bottle)) return true;
+            if (Jobs.tool(level, worker, ShearsItem.class, "shears")) shears = true;
+            else if (worker.nav.hasErrand()) return true;
+            else { worker.setStatusKey(Lang.STATUS_NEED_BOTTLES_OR_SHEARS); return false; }
+        }
+        if (!worker.approach(hive)) return true;
+        BlockState state = level.getBlockState(hive);
+        if (!isFullHive(level, hive, state)) return true;
+        if (bottles) {
+            if (!Jobs.take(level, worker, new ItemStack(Items.GLASS_BOTTLE))) return true;
+            worker.collect(new ItemStack(Items.HONEY_BOTTLE));
+            level.playSound(null, hive, net.minecraft.sounds.SoundEvents.BOTTLE_FILL, SoundSource.NEUTRAL, 1.0f, 1.0f);
+            worker.setStatusKey(Lang.STATUS_BOTTLED_HONEY, hive.toShortString());
+        } else {
+            if (!Jobs.tool(level, worker, ShearsItem.class, "shears")) return true;
+            worker.collect(new ItemStack(Items.HONEYCOMB, 3));
+            worker.getMainHandItem().hurtAndBreak(1, worker, net.minecraft.world.entity.EquipmentSlot.MAINHAND);
+            level.playSound(null, hive, net.minecraft.sounds.SoundEvents.BEEHIVE_SHEAR, SoundSource.NEUTRAL, 1.0f, 1.0f);
+            worker.setStatusKey(Lang.STATUS_COLLECTED_HONEYCOMB, hive.toShortString());
+        }
+        worker.swing(net.minecraft.world.InteractionHand.MAIN_HAND, true);
+        level.setBlock(hive, state.setValue(net.minecraft.world.level.block.BeehiveBlock.HONEY_LEVEL, 0), 3);
+        worker.markWorkFound();
+        return true;
+    }
+
+    static boolean isFullHive(ServerLevel level, BlockPos pos, BlockState state) {
+        return state.is(net.minecraft.tags.BlockTags.BEEHIVES)
+            && state.hasProperty(net.minecraft.world.level.block.BeehiveBlock.HONEY_LEVEL)
+            && state.getValue(net.minecraft.world.level.block.BeehiveBlock.HONEY_LEVEL)
+                >= net.minecraft.world.level.block.BeehiveBlock.MAX_HONEY_LEVELS
+            && net.minecraft.world.level.block.CampfireBlock.isSmokeyPos(level, pos);
+    }
+
+    /** Budgeted scan of the pen (and a little above it) for a full, smoked hive; the cursor carries over between ticks. */
+    private static BlockPos findFullHive(ServerLevel level, Worker worker, Worker.AreaBounds box) {
+        int dx = box.dx(), dz = box.dz(), dy = box.dy() + HIVE_HEADROOM;
+        long volume = (long) dx * dy * dz;
+        if (volume <= 0) return null;
+        int budget = WorkerConfig.scanBudget() * 4;
+        for (int checked = 0; checked < Math.min(volume, budget); checked++) {
+            int index = (int) Math.floorMod((long) worker.scanCursor++, volume);
+            int yOff = index / (dx * dz);
+            int zOff = (index / dx) % dz;
+            int xOff = index % dx;
+            BlockPos pos = new BlockPos(box.minX() + xOff, box.minY() + yOff, box.minZ() + zOff);
+            if (!level.isLoaded(pos)) continue;
+            BlockState state = level.getBlockState(pos);
+            if (!state.is(net.minecraft.tags.BlockTags.BEEHIVES)) continue;
+            if (isFullHive(level, pos, state) && !worker.isUnreachable(pos)) return pos;
+        }
+        return null;
     }
 
     /** Cull adults of enabled species down to 2. Returns true if still busy. */
@@ -127,7 +202,7 @@ final class ExtraJobs {
                 Animal extra = adults.get(adults.size() - 1);
                 if (!worker.approach(extra.blockPosition())) return true;
                 extra.hurt(level.damageSources().mobAttack(worker), 40);
-                worker.setStatus("Culling: " + (left - 1) + " left");
+                worker.setStatusKey(Lang.STATUS_CULLING, left - 1);
                 worker.markWorkFound();
                 return true;
             }
@@ -146,10 +221,12 @@ final class ExtraJobs {
         ItemStack foodB = findBreedFood(level, worker, b);
         if (foodA.isEmpty() || foodB.isEmpty()) return false;
         if (!worker.approach(a.blockPosition())) return true;
-        if (!consumeBreedFood(level, worker, foodA) || !consumeBreedFood(level, worker, foodB)) return false;
+        // Food still in the supply chest starts a trip there; stay busy until it is in the bag.
+        if (!consumeBreedFood(level, worker, foodA) || !consumeBreedFood(level, worker, foodB)) return worker.nav.hasErrand();
+        worker.gainXp(2);
         a.setInLove(null);
         b.setInLove(null);
-        worker.setStatus("Breeding " + type.getSimpleName().toLowerCase());
+        worker.setStatusKey(Lang.STATUS_BREEDING, type.getSimpleName().toLowerCase());
         worker.markWorkFound();
         return true;
     }
@@ -172,9 +249,9 @@ final class ExtraJobs {
         return ItemStack.EMPTY;
     }
 
+    /** Bag first; otherwise {@link Jobs#take} walks to the supply chest instead of reaching into it from afar. */
     private static boolean consumeBreedFood(ServerLevel level, Worker worker, ItemStack want) {
-        if (Jobs.take(level, worker, want)) return true;
-        return takeFromSupply(level, worker, want);
+        return Jobs.take(level, worker, want);
     }
 
     private static Item woolOf(DyeColor color) {
@@ -200,17 +277,17 @@ final class ExtraJobs {
 
     static void fisher(ServerLevel level, Worker worker) {
         Worker.AreaBounds box = worker.areaBounds();
-        if (box == null) { worker.setStatus("Set a fishing area"); worker.markIdle(); return; }
+        if (box == null) { worker.setStatusKey(Lang.STATUS_SET_FISHING_AREA); worker.markIdle(); return; }
         BlockPos shore = findShore(level, worker, box);
-        if (shore == null) { worker.setStatus("No shore water in area"); worker.markIdle(); return; }
+        if (shore == null) { worker.setStatusKey(Lang.STATUS_NO_SHORE_WATER); worker.markIdle(); return; }
         if (!worker.approachWithin(shore, 2, 2)) return;
         if (!(worker.getMainHandItem().getItem() instanceof net.minecraft.world.item.FishingRodItem)
             && !Jobs.tool(level, worker, net.minecraft.world.item.FishingRodItem.class, "fishing rod")) {
-            worker.setStatus("Missing fishing rod");
+            worker.setStatusKey(Lang.STATUS_MISSING_FISHING_ROD);
             return;
         }
         if (worker.idleUntil > level.getGameTime()) {
-            worker.setStatus("Waiting to recast");
+            worker.setStatusKey(Lang.STATUS_WAITING_RECAST);
             return;
         }
         worker.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
@@ -226,7 +303,7 @@ final class ExtraJobs {
         for (ItemStack stack : loot) worker.collect(stack);
         worker.getMainHandItem().hurtAndBreak(1, worker, net.minecraft.world.entity.EquipmentSlot.MAINHAND);
         worker.idleUntil = level.getGameTime() + 20L * (20 + level.random.nextInt(21));
-        worker.setStatus("Caught fish (" + loot.size() + ")");
+        worker.setStatusKey(Lang.STATUS_CAUGHT_FISH, loot.size());
         worker.markWorkFound();
     }
 
@@ -251,12 +328,16 @@ final class ExtraJobs {
         return null;
     }
 
+    // ---------------------------------------------------------------- smelter
+
+    /**
+     * Smelter loop: empty result slots, carry what was fetched to the furnaces, drop results off,
+     * then go to the supply chest for the next smeltables or fuel. The supply is only peeked at
+     * remotely; everything travels in the bag on foot.
+     */
     static void smelter(ServerLevel level, Worker worker) {
-        if (worker.furnaces.isEmpty()) { worker.setStatus("Assign furnaces"); worker.markIdle(); return; }
-        if (worker.supply == null) { worker.setStatus("Assign a supply chest"); worker.markIdle(); return; }
-        if (!(level.getBlockEntity(worker.supply) instanceof Container supply)) {
-            worker.setStatus("Supply chest missing"); return;
-        }
+        if (worker.furnaces.isEmpty()) { worker.setStatusKey(Lang.STATUS_ASSIGN_FURNACES); worker.markIdle(); return; }
+        if (worker.supply == null) { worker.setStatusKey(Lang.STATUS_ASSIGN_SUPPLY); worker.markIdle(); return; }
         for (BlockPos furnacePos : worker.furnaces) {
             if (!level.isLoaded(furnacePos)) continue;
             if (!(level.getBlockEntity(furnacePos) instanceof AbstractFurnaceBlockEntity furnace)) continue;
@@ -267,127 +348,232 @@ final class ExtraJobs {
                 furnace.setItem(2, ItemStack.EMPTY);
                 furnace.setChanged();
                 worker.collect(take);
-                worker.setStatus("Collected smelted items");
+                worker.setStatusKey(Lang.STATUS_COLLECTED, take.getCount(), StatusText.name(take));
                 worker.markWorkFound();
                 return;
             }
         }
+        if (deliverFurnaceHaul(level, worker)) return;
+        if (worker.output != null && Jobs.depositWorthwhile(worker)) {
+            if (!Jobs.depositPublic(level, worker)) return;
+            worker.markWorkFound();
+            return;
+        }
+        if (fetchForFurnaces(level, worker)) return;
+        worker.setStatusKey(Lang.STATUS_FURNACES_IDLE);
+        worker.markIdle();
+    }
+
+    // ---------------------------------------------------------------- furnace feeding (smelter and courier)
+
+    /** Anything with a burn time is fuel: data-driven, so modded fuels and datapack changes count. */
+    static boolean isFuel(ItemStack stack) {
+        return !stack.isEmpty() && stack.getBurnTime(RecipeType.SMELTING) > 0;
+    }
+
+    /** Recipe type the furnace block cooks with: blast furnaces take ores, smokers food, furnaces everything. */
+    static RecipeType<? extends AbstractCookingRecipe> cookingType(BlockState furnaceState) {
+        if (furnaceState.is(Blocks.BLAST_FURNACE)) return RecipeType.BLASTING;
+        if (furnaceState.is(Blocks.SMOKER)) return RecipeType.SMOKING;
+        return RecipeType.SMELTING;
+    }
+
+    static boolean isSmeltableIn(ServerLevel level, ItemStack stack, BlockState furnaceState) {
+        if (stack.isEmpty()) return false;
+        return level.getRecipeManager().getRecipeFor(cookingType(furnaceState), new SingleRecipeInput(stack), level).isPresent();
+    }
+
+    /** Furnace slot that would take the stack right now (0 input, 1 fuel), or -1. */
+    private static int acceptingSlot(ServerLevel level, AbstractFurnaceBlockEntity furnace, BlockState furnaceState, ItemStack stack) {
+        if (isSmeltableIn(level, stack, furnaceState) && hasRoom(furnace.getItem(0), stack)) return 0;
+        if (isFuel(stack) && hasRoom(furnace.getItem(1), stack)) return 1;
+        return -1;
+    }
+
+    private static boolean hasRoom(ItemStack slot, ItemStack stack) {
+        return slot.isEmpty() || (ItemStack.isSameItemSameComponents(slot, stack) && slot.getCount() < slot.getMaxStackSize());
+    }
+
+    /**
+     * Carry fetched smeltables and fuel from the bag into the furnaces, a stack at a time. True while
+     * walking or after loading something. Haul items a furnace cannot take right now stay in the bag
+     * (deposit leaves them alone) until a slot frees up.
+     */
+    static boolean deliverFurnaceHaul(ServerLevel level, Worker worker) {
+        if (worker.furnaceHaul.isEmpty()) return false;
+        if (!worker.nav.hasErrand()) worker.furnaceHaul.removeIf(id -> countItemId(worker, id) == 0);
+        if (worker.furnaceHaul.isEmpty()) return false;
         for (BlockPos furnacePos : worker.furnaces) {
-            if (!level.isLoaded(furnacePos)) continue;
+            if (!level.isLoaded(furnacePos) || worker.isUnreachable(furnacePos)) continue;
             if (!(level.getBlockEntity(furnacePos) instanceof AbstractFurnaceBlockEntity furnace)) continue;
-            BlockState state = level.getBlockState(furnacePos);
-            if (!(state.getBlock() instanceof AbstractFurnaceBlock)) continue;
-
-            if (furnace.getItem(0).isEmpty()) {
-                ItemStack smeltable = findSmeltable(level, supply, state);
-                if (!smeltable.isEmpty()) {
-                    if (!worker.approach(furnacePos)) return;
-                    ItemStack moved = smeltable.split(Math.min(8, smeltable.getCount()));
-                    furnace.setItem(0, moved);
-                    furnace.setChanged();
-                    supply.setChanged();
-                    worker.setStatus("Loaded furnace");
-                    worker.markWorkFound();
-                    return;
-                }
-            }
-            if (furnace.getItem(1).isEmpty()) {
-                ItemStack fuel = findFuel(supply);
-                if (!fuel.isEmpty()) {
-                    if (!worker.approach(furnacePos)) return;
-                    ItemStack moved = fuel.split(Math.min(8, fuel.getCount()));
-                    furnace.setItem(1, moved);
-                    furnace.setChanged();
-                    supply.setChanged();
-                    worker.setStatus("Fueled furnace");
-                    worker.markWorkFound();
-                    return;
-                }
+            BlockState furnaceState = level.getBlockState(furnacePos);
+            for (int i = 0; i < worker.bag.getContainerSize(); i++) {
+                ItemStack stack = worker.bag.getItem(i);
+                if (stack.isEmpty() || !worker.furnaceHaul.contains(itemId(stack))) continue;
+                int slot = acceptingSlot(level, furnace, furnaceState, stack);
+                if (slot < 0) continue;
+                if (!worker.approach(furnacePos)) return true;
+                ItemStack current = furnace.getItem(slot);
+                int room = current.isEmpty() ? stack.getMaxStackSize() : current.getMaxStackSize() - current.getCount();
+                int n = Math.min(room, stack.getCount());
+                if (current.isEmpty()) furnace.setItem(slot, stack.split(n));
+                else { current.grow(n); stack.shrink(n); }
+                furnace.setChanged();
+                worker.bag.setChanged();
+                worker.swing(net.minecraft.world.InteractionHand.MAIN_HAND, true);
+                worker.setStatusKey(slot == 0 ? Lang.STATUS_LOADED_FURNACE : Lang.STATUS_FUELLED_FURNACE,
+                    StatusText.name(furnaceState.getBlock()), n, StatusText.name(stack));
+                worker.markWorkFound();
+                return true;
             }
         }
-        if (worker.output != null && !Jobs.bagMostlyEmpty(worker)) {
-            if (!Jobs.depositPublic(level, worker)) return;
-            worker.markWorkFound();
-            return;
-        }
-        worker.setStatus("Furnaces idle");
-        worker.markIdle();
+        return false;
     }
 
-    private static ItemStack findSmeltable(ServerLevel level, Container supply, BlockState furnaceState) {
-        boolean blast = furnaceState.is(Blocks.BLAST_FURNACE);
-        boolean smoker = furnaceState.is(Blocks.SMOKER);
-        for (int i = 0; i < supply.getContainerSize(); i++) {
-            ItemStack stack = supply.getItem(i);
-            if (stack.isEmpty()) continue;
-            var recipe = level.getRecipeManager().getRecipeFor(
-                net.minecraft.world.item.crafting.RecipeType.SMELTING,
-                new net.minecraft.world.item.crafting.SingleRecipeInput(stack), level);
-            if (recipe.isEmpty()) continue;
-            if (blast) {
-                var r = level.getRecipeManager().getRecipeFor(
-                    net.minecraft.world.item.crafting.RecipeType.BLASTING,
-                    new net.minecraft.world.item.crafting.SingleRecipeInput(stack), level);
-                if (r.isEmpty()) continue;
-            } else if (smoker) {
-                var r = level.getRecipeManager().getRecipeFor(
-                    net.minecraft.world.item.crafting.RecipeType.SMOKING,
-                    new net.minecraft.world.item.crafting.SingleRecipeInput(stack), level);
-                if (r.isEmpty()) continue;
+    /**
+     * Find a furnace with an empty input or fuel slot and start a supply trip for a stack of what
+     * it needs. The supply chest is only looked into remotely; the items arrive in the bag and
+     * {@link #deliverFurnaceHaul} carries them over. True when a trip was started or is pending.
+     */
+    static boolean fetchForFurnaces(ServerLevel level, Worker worker) {
+        if (worker.supply == null) return false;
+        if (worker.nav.hasErrand()) return true;
+        Container supply = Jobs.supplyContainer(level, worker);
+        if (supply == null) { worker.setStatusKey(Lang.STATUS_SUPPLY_CHEST_MISSING); return false; }
+        for (BlockPos furnacePos : worker.furnaces) {
+            if (!level.isLoaded(furnacePos) || worker.isUnreachable(furnacePos)) continue;
+            if (!(level.getBlockEntity(furnacePos) instanceof AbstractFurnaceBlockEntity furnace)) continue;
+            BlockState furnaceState = level.getBlockState(furnacePos);
+            if (furnace.getItem(0).isEmpty() && !carrying(level, worker, s -> isSmeltableIn(level, s, furnaceState))) {
+                ItemStack want = firstMatching(supply, s -> isSmeltableIn(level, s, furnaceState));
+                if (!want.isEmpty() && startHaul(level, worker, want)) return true;
             }
-            return stack;
-        }
-        return ItemStack.EMPTY;
-    }
-
-    private static ItemStack findFuel(Container supply) {
-        for (int i = 0; i < supply.getContainerSize(); i++) {
-            ItemStack stack = supply.getItem(i);
-            if (stack.isEmpty()) continue;
-            if (stack.is(Items.COAL) || stack.is(Items.CHARCOAL) || stack.is(Items.COAL_BLOCK)
-                || stack.is(Items.LAVA_BUCKET) || stack.is(Items.BLAZE_ROD)
-                || stack.is(ItemTags.LOGS_THAT_BURN) || stack.is(ItemTags.PLANKS)
-                || stack.is(Items.STICK) || stack.is(Items.DRIED_KELP_BLOCK)) {
-                return stack;
+            if (furnace.getItem(1).isEmpty() && !carrying(level, worker, ExtraJobs::isFuel)) {
+                ItemStack want = firstMatching(supply, ExtraJobs::isFuel);
+                if (!want.isEmpty() && startHaul(level, worker, want)) return true;
             }
         }
-        return ItemStack.EMPTY;
+        return false;
     }
 
-    static void courier(ServerLevel level, Worker worker) {
-        if (worker.pickups.isEmpty()) { worker.setStatus("Assign pickup chests"); worker.markIdle(); return; }
-        if (worker.output == null) { worker.setStatus("Assign drop-off chest"); worker.markIdle(); return; }
-
-        if (!Jobs.bagMostlyEmpty(worker)) {
-            if (!Jobs.depositPublic(level, worker)) return;
-            worker.markWorkFound();
-            return;
-        }
-
-        for (BlockPos pickup : worker.pickups) {
-            if (!level.isLoaded(pickup)) continue;
-            if (!(level.getBlockEntity(pickup) instanceof Container chest)) continue;
-            ItemStack take = firstNonEmpty(chest);
-            if (take.isEmpty()) continue;
-            if (!worker.approach(pickup)) return;
-            ItemStack moved = take.split(Math.min(take.getCount(), take.getMaxStackSize()));
-            chest.setChanged();
-            worker.collect(moved);
-            worker.setStatus("Picked up from " + pickup.toShortString());
-            worker.markWorkFound();
-            return;
-        }
-        worker.setStatus("Route clear — nothing to haul");
-        worker.markIdle();
+    private static boolean startHaul(ServerLevel level, Worker worker, ItemStack want) {
+        String id = itemId(want);
+        boolean pending = Jobs.fetchFromSupply(level, worker, Jobs.itemKey(want),
+            s -> ItemStack.isSameItemSameComponents(s, want), 1, want.getMaxStackSize(),
+            want.getHoverName().getString() + " for the furnaces", want);
+        if (pending && !worker.furnaceHaul.contains(id)) worker.furnaceHaul.add(id);
+        if (pending) worker.markWorkFound();
+        return pending;
     }
 
-    private static ItemStack firstNonEmpty(Container chest) {
+    private static boolean carrying(ServerLevel level, Worker worker, java.util.function.Predicate<ItemStack> match) {
+        for (int i = 0; i < worker.bag.getContainerSize(); i++) {
+            ItemStack stack = worker.bag.getItem(i);
+            if (!stack.isEmpty() && worker.furnaceHaul.contains(itemId(stack)) && match.test(stack)) return true;
+        }
+        return false;
+    }
+
+    private static ItemStack firstMatching(Container chest, java.util.function.Predicate<ItemStack> match) {
         for (int i = 0; i < chest.getContainerSize(); i++) {
             ItemStack stack = chest.getItem(i);
-            if (!stack.isEmpty()) return stack;
+            if (!stack.isEmpty() && match.test(stack)) return stack;
         }
         return ItemStack.EMPTY;
     }
+
+    static String itemId(ItemStack stack) {
+        return net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+    }
+
+    private static int countItemId(Worker worker, String id) {
+        int n = 0;
+        for (int i = 0; i < worker.bag.getContainerSize(); i++) {
+            ItemStack s = worker.bag.getItem(i);
+            if (!s.isEmpty() && id.equals(itemId(s))) n += s.getCount();
+        }
+        return n;
+    }
+
+    // ---------------------------------------------------------------- courier
+
+    /** How many of this item one visit may take from a pickup chest, honouring its filter and "keep N". */
+    record Pick(int slot, int count) {}
+
+    /**
+     * Courier loop: furnace goods in the bag go to the furnaces, loot goes to the drop-off chest,
+     * then the pickups are visited round-robin (each visit takes one stack that passes the chest's
+     * filter and leaves its "keep" count behind), and finally the supply chest is raided for the
+     * furnaces when there are any.
+     */
+    static void courier(ServerLevel level, Worker worker) {
+        boolean route = !worker.pickups.isEmpty() && worker.output != null;
+        boolean furnaceRun = !worker.furnaces.isEmpty() && worker.supply != null;
+        if (!route && !furnaceRun) {
+            if (worker.pickups.isEmpty() && worker.furnaces.isEmpty()) worker.setStatusKey(Lang.STATUS_ASSIGN_PICKUPS);
+            else if (!worker.pickups.isEmpty() && worker.output == null) worker.setStatusKey(Lang.STATUS_ASSIGN_DROPOFF);
+            else worker.setStatusKey(Lang.STATUS_ASSIGN_SUPPLY_FURNACES);
+            worker.markIdle();
+            return;
+        }
+        if (deliverFurnaceHaul(level, worker)) return;
+        if (worker.output != null && Jobs.hasDepositableLoot(worker)) {
+            if (!Jobs.depositPublic(level, worker)) return;
+            worker.markWorkFound();
+            return;
+        }
+        if (route && pickupRound(level, worker)) return;
+        if (furnaceRun && fetchForFurnaces(level, worker)) return;
+        worker.setStatusKey(Lang.STATUS_ROUTE_CLEAR);
+        worker.markIdle();
+    }
+
+    /** Visit the next pickup chest (from the saved cursor) that has something takeable. True while busy. */
+    private static boolean pickupRound(ServerLevel level, Worker worker) {
+        int n = worker.pickups.size();
+        for (int i = 0; i < n; i++) {
+            int index = Math.floorMod(worker.courierCursor + i, n);
+            BlockPos pickup = worker.pickups.get(index);
+            if (!level.isLoaded(pickup) || worker.isUnreachable(pickup)) continue;
+            if (!(level.getBlockEntity(pickup) instanceof Container chest)) continue;
+            Pick pick = pickFrom(worker, pickup, chest);
+            if (pick == null) continue;
+            if (!worker.approach(pickup)) return true;
+            pick = pickFrom(worker, pickup, chest); // the chest may have changed on the way
+            if (pick == null) continue;
+            ItemStack moved = chest.getItem(pick.slot()).split(pick.count());
+            chest.setChanged();
+            worker.collect(moved);
+            worker.courierCursor = index + 1;
+            worker.setStatusKey(Lang.STATUS_PICKED_UP_FROM_CHEST, moved.getCount(), StatusText.name(moved), index + 1);
+            worker.markWorkFound();
+            return true;
+        }
+        return false;
+    }
+
+    static Pick pickFrom(Worker worker, BlockPos pickup, Container chest) {
+        List<String> filter = worker.pickupFilters.getOrDefault(pickup.asLong(), List.of());
+        int keep = worker.pickupKeep.getOrDefault(pickup.asLong(), 0);
+        for (int i = 0; i < chest.getContainerSize(); i++) {
+            ItemStack stack = chest.getItem(i);
+            if (stack.isEmpty()) continue;
+            if (!filter.isEmpty() && !filter.contains(itemId(stack))) continue;
+            int allowed = stack.getCount();
+            if (keep > 0) {
+                int total = 0;
+                for (int j = 0; j < chest.getContainerSize(); j++) {
+                    ItemStack other = chest.getItem(j);
+                    if (ItemStack.isSameItemSameComponents(other, stack)) total += other.getCount();
+                }
+                allowed = Math.min(allowed, total - keep);
+            }
+            if (allowed <= 0) continue;
+            return new Pick(i, Math.min(allowed, stack.getMaxStackSize()));
+        }
+        return null;
+    }
+
 
     private static boolean takeOrSupply(ServerLevel level, Worker worker, ItemStack template) {
         if (Jobs.take(level, worker, template)) {
@@ -403,21 +589,6 @@ final class ExtraJobs {
             return true;
         }
         return false;
-    }
-
-    private static boolean takeFromSupply(ServerLevel level, Worker worker, ItemStack want) {
-        if (worker.supply == null || !(level.getBlockEntity(worker.supply) instanceof Container chest)) return false;
-        int need = want.getCount();
-        for (int i = 0; i < chest.getContainerSize() && need > 0; i++) {
-            ItemStack stack = chest.getItem(i);
-            if (!ItemStack.isSameItemSameComponents(stack, want)) continue;
-            int take = Math.min(need, stack.getCount());
-            ItemStack moved = stack.split(take);
-            worker.collect(moved);
-            need -= take;
-            chest.setChanged();
-        }
-        return need <= 0;
     }
 
     private static int countItem(Worker worker, Item item) {

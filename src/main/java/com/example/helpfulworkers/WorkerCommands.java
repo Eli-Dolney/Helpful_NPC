@@ -15,13 +15,6 @@ final class WorkerCommands {
 
     static void register(RegisterCommandsEvent event) {
         var root = Commands.literal("worker").requires(source -> source.getEntity() instanceof ServerPlayer);
-        root.then(Commands.literal("site").executes(ctx -> withWorker(ctx.getSource().getPlayer(), w -> { SiteUi.openWorker(ctx.getSource().getPlayer(), w); return 1; })));
-        root.then(Commands.literal("warehouse").executes(ctx -> {
-            ServerPlayer p = ctx.getSource().getPlayer();
-            var hit = p.pick(8, 0, false);
-            if (hit instanceof BlockHitResult block) SiteUi.openCore(p, block.getBlockPos());
-            return 1;
-        }));
         root.then(Commands.literal("status").executes(ctx -> withWorker(ctx.getSource().getPlayer(),
             w -> msg(ctx.getSource().getPlayer(), WorkerActions.status(ctx.getSource().getPlayer(), w)))));
         root.then(Commands.literal("start").executes(ctx -> withWorker(ctx.getSource().getPlayer(),
@@ -31,14 +24,14 @@ final class WorkerCommands {
         root.then(Commands.literal("home").executes(ctx -> withWorker(ctx.getSource().getPlayer(),
             w -> msg(ctx.getSource().getPlayer(), WorkerActions.home(ctx.getSource().getPlayer(), w)))));
         root.then(Commands.literal("role").then(Commands.argument("role", StringArgumentType.word()).suggests((ctx,builder) -> {
-            for (String role : new String[]{"farmer","forester","miner","builder","knight","archer","rancher","fisher","smelter","courier"}) builder.suggest(role);
+            for (String role : WorkerActions.ROLES) builder.suggest(role);
             return builder.buildFuture();
         }).executes(ctx -> withWorker(ctx.getSource().getPlayer(), w ->
             msg(ctx.getSource().getPlayer(), WorkerActions.setRole(ctx.getSource().getPlayer(), w,
                 StringArgumentType.getString(ctx, "role"), true))))));
         root.then(Commands.literal("mode").then(Commands.argument("mode", StringArgumentType.word()).suggests((ctx,builder) -> {
-            builder.suggest("excavate").suggest("branches").suggest("terraform")
-                .suggest("staircase").suggest("strip").suggest("colony"); return builder.buildFuture();
+            for (String mode : WorkerActions.MINE_MODES) builder.suggest(mode);
+            return builder.buildFuture();
         }).executes(ctx -> withWorker(ctx.getSource().getPlayer(), w ->
             msg(ctx.getSource().getPlayer(), WorkerActions.setMode(ctx.getSource().getPlayer(), w,
                 StringArgumentType.getString(ctx, "mode")))))));
@@ -94,6 +87,26 @@ final class WorkerCommands {
             .then(Commands.argument("id", StringArgumentType.greedyString()).executes(ctx ->
                 withWorker(ctx.getSource().getPlayer(), w -> msg(ctx.getSource().getPlayer(),
                     WorkerActions.approveRecipe(ctx.getSource().getPlayer(), w, StringArgumentType.getString(ctx, "id")))))));
+        root.then(Commands.literal("siteprep").then(Commands.argument("mode", StringArgumentType.word()).suggests((ctx,builder) -> {
+            builder.suggest("clear").suggest("flatten").suggest("none"); return builder.buildFuture();
+        }).executes(ctx -> withWorker(ctx.getSource().getPlayer(), w -> msg(ctx.getSource().getPlayer(),
+            WorkerActions.setSitePrep(ctx.getSource().getPlayer(), w, StringArgumentType.getString(ctx, "mode")))))));
+        root.then(Commands.literal("keep").then(Commands.argument("count",
+            com.mojang.brigadier.arguments.IntegerArgumentType.integer(0, 1728)).executes(ctx ->
+            withWorker(ctx.getSource().getPlayer(), w -> msg(ctx.getSource().getPlayer(),
+                WorkerActions.setReserve(ctx.getSource().getPlayer(), w, ctx.getSource().getPlayer().getMainHandItem(),
+                    com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "count")))))));
+        root.then(Commands.literal("request")
+            .then(Commands.literal("clear").executes(ctx -> withWorker(ctx.getSource().getPlayer(), w ->
+                msg(ctx.getSource().getPlayer(), WorkerActions.clearRequests(ctx.getSource().getPlayer(), w)))))
+            .then(Commands.literal("stop").executes(ctx -> withWorker(ctx.getSource().getPlayer(), w ->
+                msg(ctx.getSource().getPlayer(), WorkerActions.toggleRequestStop(ctx.getSource().getPlayer(), w)))))
+            .then(Commands.argument("count", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 2304))
+                .executes(ctx -> withWorker(ctx.getSource().getPlayer(), w -> msg(ctx.getSource().getPlayer(),
+                    WorkerActions.addRequest(ctx.getSource().getPlayer(), w, ctx.getSource().getPlayer().getMainHandItem(),
+                        com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "count")))))));
+        root.then(Commands.literal("flatten").executes(ctx -> withWorker(ctx.getSource().getPlayer(), w ->
+            msg(ctx.getSource().getPlayer(), WorkerActions.flattenPlot(ctx.getSource().getPlayer(), w)))));
         root.then(Commands.literal("blueprint")
             .then(Commands.literal("capture").then(Commands.argument("name", StringArgumentType.word()).executes(ctx ->
                 withWorker(ctx.getSource().getPlayer(), w -> msg(ctx.getSource().getPlayer(),

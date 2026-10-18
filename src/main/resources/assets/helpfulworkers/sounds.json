@@ -1,0 +1,18 @@
+{
+  "worker.greet": {
+    "subtitle": "subtitles.helpfulworkers.worker.greet",
+    "sounds": [ "minecraft:mob/villager/yes1", "minecraft:mob/villager/yes2", "minecraft:mob/villager/idle1" ]
+  },
+  "worker.chatter": {
+    "subtitle": "subtitles.helpfulworkers.worker.chatter",
+    "sounds": [ "minecraft:mob/villager/idle2", "minecraft:mob/villager/idle3", "minecraft:mob/villager/haggle1" ]
+  },
+  "worker.hmm": {
+    "subtitle": "subtitles.helpfulworkers.worker.hmm",
+    "sounds": [ "minecraft:mob/villager/no1", "minecraft:mob/villager/no2" ]
+  },
+  "worker.levelup": {
+    "subtitle": "subtitles.helpfulworkers.worker.levelup",
+    "sounds": [ { "name": "minecraft:random/levelup", "volume": 0.6 } ]
+  }
+}

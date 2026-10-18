@@ -35,6 +35,7 @@ final class WorkerEquip {
             ItemStack current = worker.getItemBySlot(slot);
             int currentScore = armorScore(current, slot);
             ItemStack best = ItemStack.EMPTY;
+            Container bestFrom = null;
             int bestScore = currentScore;
             Container supply = supplyOf(level, worker);
             for (Container inv : new Container[]{worker.bag, supply}) {
@@ -47,11 +48,12 @@ final class WorkerEquip {
                     if (score > bestScore) {
                         bestScore = score;
                         best = stack;
+                        bestFrom = inv;
                     }
                 }
             }
             if (!best.isEmpty() && bestScore > currentScore) {
-                takeAndEquip(level, worker, slot, best, current);
+                takeAndEquip(level, worker, slot, best, current, bestFrom);
             }
         }
     }
@@ -62,6 +64,7 @@ final class WorkerEquip {
         ItemStack current = worker.getItemBySlot(slot);
         int currentScore = weaponScore(current);
         ItemStack best = ItemStack.EMPTY;
+        Container bestFrom = null;
         int bestScore = currentScore;
         Container supply = supplyOf(level, worker);
         for (Container inv : new Container[]{worker.bag, supply}) {
@@ -73,23 +76,35 @@ final class WorkerEquip {
                 if (score > bestScore || (best.isEmpty() && current.isEmpty())) {
                     bestScore = Math.max(score, 1);
                     best = stack;
+                    bestFrom = inv;
                 }
             }
         }
         if (!best.isEmpty() && (current.isEmpty() || bestScore > currentScore)) {
-            takeAndEquip(level, worker, slot, best, current);
+            takeAndEquip(level, worker, slot, best, current, bestFrom);
         }
     }
 
+    /**
+     * Equip from the bag at once. Gear spotted in the supply chest is fetched on foot instead: the
+     * trip lands it in the bag, the bag listener marks equipment dirty, and the next pass equips it.
+     */
     private static void takeAndEquip(ServerLevel level, Worker worker, EquipmentSlot slot,
-                                    ItemStack fromStack, ItemStack current) {
+                                    ItemStack fromStack, ItemStack current, Container from) {
+        if (from != worker.bag) {
+            Jobs.fetchFromSupply(level, worker, Jobs.itemKey(fromStack),
+                s -> ItemStack.isSameItemSameComponents(s, fromStack), 1, 1,
+                fromStack.getHoverName().getString(), fromStack);
+            return;
+        }
         ItemStack taken = fromStack.split(1);
         if (!current.isEmpty()) worker.collect(current);
         worker.setItemSlot(slot, taken);
-        if (worker.supply != null && level.getBlockEntity(worker.supply) instanceof Container) {
-            ((Container) level.getBlockEntity(worker.supply)).setChanged();
-        }
+        worker.bag.setChanged();
     }
+
+    /** Only walk for gear in a chest that is reasonably close; a knight never leaves its owner for it. */
+    private static final double SUPPLY_RANGE = 32;
 
     private static int armorScore(ItemStack stack, EquipmentSlot slot) {
         if (!(stack.getItem() instanceof ArmorItem armor)) return -1;
@@ -108,6 +123,8 @@ final class WorkerEquip {
 
     private static Container supplyOf(ServerLevel level, Worker worker) {
         if (worker.supply == null || !level.isLoaded(worker.supply)) return null;
+        if (worker.distanceToSqr(worker.supply.getX() + 0.5, worker.supply.getY(), worker.supply.getZ() + 0.5)
+            > SUPPLY_RANGE * SUPPLY_RANGE) return null;
         return level.getBlockEntity(worker.supply) instanceof Container c ? c : null;
     }
 }

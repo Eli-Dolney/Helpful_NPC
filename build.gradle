@@ -3,7 +3,7 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.141'
 }
 
-version = '0.5.3'
+version = '0.9.0'
 group = 'com.example.helpfulworkers'
 base { archivesName = 'helpfulworkers' }
 
@@ -13,16 +13,16 @@ neoForge {
     version = '21.1.235'
     runs {
         client { client() }
-        uiTest {
+        // Dev UI check: opens "New World" and screenshots every mod screen into run/screenshots (see UiShots).
+        uiShots {
             client()
-            gameDirectory = file('run/uitest')
-            systemProperty 'helpfulworkers.uiTest', 'true'
+            systemProperty 'helpfulworkers.uishots', 'true'
+            programArguments.addAll('--quickPlaySingleplayer', 'New World')
         }
         server { server() }
         gameTestServer {
             type = "gameTestServer"
             systemProperty 'neoforge.enabledGameTestNamespaces', 'helpfulworkers'
-            gameDirectory = file('run/gametest')
         }
     }
     mods { helpfulworkers { sourceSet sourceSets.main } }

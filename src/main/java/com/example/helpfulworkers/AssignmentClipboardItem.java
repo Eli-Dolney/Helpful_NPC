@@ -38,10 +38,6 @@ public final class AssignmentClipboardItem extends Item {
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
-        if (player instanceof ServerPlayer sp && SiteUi.pending(sp)) {
-            if (player.isShiftKeyDown()) { SiteUi.close(sp); say(player, "Site assignment cancelled"); }
-            return InteractionResultHolder.consume(stack);
-        }
         if (!level.isClientSide && player.isShiftKeyDown() && player instanceof ServerPlayer serverPlayer
             && WorkerSessions.getClipboard(serverPlayer) != null) {
             WorkerSessions.clearClipboard(serverPlayer);
@@ -96,7 +92,7 @@ public final class AssignmentClipboardItem extends Item {
             session.pendingConfirm = clicked.immutable();
             highlight(level, session.pendingFirst);
             highlight(level, clicked);
-            if ("terraform".equals(worker.mode) && "miner".equals(worker.role)) {
+            if (WorkerActions.usesDigDepth(worker.mode) && "miner".equals(worker.role)) {
                 session.awaitingDepth = true;
                 WorkerNetwork.openDepthPicker(player, worker, session.pendingFirst, session.pendingConfirm);
                 say(player, "Footprint marked. Choose how deep to dig.");
@@ -111,7 +107,7 @@ public final class AssignmentClipboardItem extends Item {
                     say(player, build.text());
                 } else if (!"builder".equals(worker.role)) {
                     worker.working = true;
-                    worker.status = "Working";
+                    worker.setStatusKey(Lang.STATUS_WORKING);
                     say(player, result.text() + ". " + worker.getName().getString() + " started.");
                 } else {
                     say(player, "Copy area marked from " + first.toShortString() + " to " + clicked.toShortString()

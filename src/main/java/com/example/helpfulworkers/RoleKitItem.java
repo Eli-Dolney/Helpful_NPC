@@ -38,15 +38,7 @@ public final class RoleKitItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.literal(switch (role) {
-            case "farmer" -> "Assign a worker to till, plant, and harvest crops.";
-            case "forester" -> "Assign a worker to fell trees and replant saplings.";
-            case "miner" -> "Assign a worker to dig, terraform, or strip-mine.";
-            case "builder" -> "Assign a worker to place village buildings and blueprints.";
-            case "knight" -> "Assign a worker to fight nearby monsters with sword and shield.";
-            case "archer" -> "Assign a worker to snipe monsters with a bow.";
-            default -> "Assign this role to your worker.";
-        }));
-        tooltip.add(Component.literal("Reusable. Does not provide tools or materials."));
+        tooltip.add(Component.translatable(Lang.kitDescKey(role)).withStyle(net.minecraft.ChatFormatting.GRAY));
+        tooltip.add(Component.translatable(Lang.KIT_REUSABLE).withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
     }
 }

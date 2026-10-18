@@ -15,6 +15,16 @@ public final class WorkerInventoryMenu extends AbstractContainerMenu {
         EquipmentSlot.MAINHAND, EquipmentSlot.OFFHAND
     };
 
+    /** Faint outlines in empty equipment slots, from the vanilla block atlas. */
+    private static final net.minecraft.resources.ResourceLocation[] EMPTY_ICONS = {
+        net.minecraft.world.inventory.InventoryMenu.EMPTY_ARMOR_SLOT_HELMET,
+        net.minecraft.world.inventory.InventoryMenu.EMPTY_ARMOR_SLOT_CHESTPLATE,
+        net.minecraft.world.inventory.InventoryMenu.EMPTY_ARMOR_SLOT_LEGGINGS,
+        net.minecraft.world.inventory.InventoryMenu.EMPTY_ARMOR_SLOT_BOOTS,
+        net.minecraft.resources.ResourceLocation.withDefaultNamespace("item/empty_slot_pickaxe"),
+        net.minecraft.world.inventory.InventoryMenu.EMPTY_ARMOR_SLOT_SHIELD
+    };
+
     private final Worker worker;
     private final EquipmentContainer equipment;
 
@@ -44,6 +54,11 @@ public final class WorkerInventoryMenu extends AbstractContainerMenu {
                 @Override
                 public int getMaxStackSize() {
                     return EQUIP_ORDER[index].getType() == EquipmentSlot.Type.HUMANOID_ARMOR ? 1 : 64;
+                }
+
+                @Override
+                public com.mojang.datafixers.util.Pair<net.minecraft.resources.ResourceLocation, net.minecraft.resources.ResourceLocation> getNoItemIcon() {
+                    return com.mojang.datafixers.util.Pair.of(net.minecraft.world.inventory.InventoryMenu.BLOCK_ATLAS, EMPTY_ICONS[index]);
                 }
             });
         }
