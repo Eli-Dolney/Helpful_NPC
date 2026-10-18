@@ -90,10 +90,12 @@ public final class HelpfulWorkers {
                 output.accept(GATHERER_KIT.get());
                 output.accept(CLIPBOARD.get());
                 output.accept(TOWN_HALL_ITEM.get());
+                SiteBlocks.CORES.values().forEach(item -> output.accept(item.get()));
             }).build());
 
     public HelpfulWorkers(IEventBus bus, ModContainer container) {
         BLOCKS.register(bus);
+        SiteBlocks.BLOCKS.register(bus);
         WorkerSounds.SOUNDS.register(bus);
         ENTITIES.register(bus);
         ITEMS.register(bus);
@@ -109,6 +111,7 @@ public final class HelpfulWorkers {
         WorkerSessions.register();
         WorkerRegistry.register();
         WorkerCombat.register();
+        SiteEvents.register();
     }
 
     private void attributes(EntityAttributeCreationEvent event) {

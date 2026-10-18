@@ -75,6 +75,8 @@ final class WorkerActions {
     static ActionResult pause(ServerPlayer player, Worker worker) {
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
+        WarehouseJobs.release(worker.getUUID());
+        SiteJobs.suspend(worker);
         worker.working = false;
         worker.target = null;
         worker.getNavigation().stop();
@@ -108,6 +110,7 @@ final class WorkerActions {
     }
 
     static ActionResult setRole(ServerPlayer player, Worker worker, String role, boolean requireKit) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction before changing roles");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (!isRole(role)) return ActionResult.fail("Unknown role: " + role);
@@ -176,6 +179,7 @@ final class WorkerActions {
     }
 
     static ActionResult setMode(ServerPlayer player, Worker worker, String mode) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (!isMineMode(mode)) return ActionResult.fail("Unknown mining mode");
@@ -332,15 +336,30 @@ final class WorkerActions {
         return ActionResult.ok(worker.useBoneMeal ? "Bone meal on" : "Bone meal off");
     }
 
+    /** Null when a work area of this size is allowed (large areas are scanned in budgeted steps), else why not. */
+    static String areaSizeError(int width, int height, int depth) {
+        if (width > Worker.MAX_AREA_SIDE || depth > Worker.MAX_AREA_SIDE) {
+            return "Area too wide (max " + Worker.MAX_AREA_SIDE + " x " + Worker.MAX_AREA_SIDE + " blocks). Shrink the footprint.";
+        }
+        long volume = (long) width * height * depth;
+        if (volume > Worker.MAX_AREA_VOLUME) {
+            return "Area too large (" + volume + " blocks). Max is " + Worker.MAX_AREA_VOLUME + ". Shrink the footprint or depth.";
+        }
+        return null;
+    }
+
     static ActionResult setArea(ServerPlayer player, Worker worker, BlockPos first, BlockPos second) {
         return setArea(player, worker, first, second, worker.digDepth);
     }
 
     static ActionResult setArea(ServerPlayer player, Worker worker, BlockPos first, BlockPos second, int digDepth) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction before changing zones");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (first == null || second == null) return ActionResult.fail("Both area corners are required");
-        if (!worker.level().isLoaded(first) || !worker.level().isLoaded(second)) {
+        // A big area's far corner may be out of view by the time the near one is marked; unloaded
+        // parts are simply skipped by the scans until a player is near them again.
+        if (!worker.level().isLoaded(first) && !worker.level().isLoaded(second)) {
             return ActionResult.fail("Area corners must be loaded");
         }
         boolean plannedMine = "miner".equals(worker.role) && isPlannedMineMode(worker.mode);
@@ -354,10 +373,8 @@ final class WorkerActions {
         if (digDepth > 0) bottom = top - digDepth + 1;
         else if (digDepth < 0) bottom = worker.level().getMinBuildHeight();
         if (bottom < worker.level().getMinBuildHeight()) bottom = worker.level().getMinBuildHeight();
-        long volume = (long)(maxX - minX + 1) * (top - bottom + 1) * (maxZ - minZ + 1);
-        if (volume > 32768) {
-            return ActionResult.fail("Area too large (" + volume + " blocks). Max is 32768. Shrink the footprint or depth.");
-        }
+        String sizeError = areaSizeError(maxX - minX + 1, top - bottom + 1, maxZ - minZ + 1);
+        if (sizeError != null) return ActionResult.fail(sizeError);
         if (plannedMine) {
             // Keep click order: the stairway starts at the first corner and heads toward the second.
             worker.first = first.immutable();
@@ -368,6 +385,9 @@ final class WorkerActions {
         }
         worker.digDepth = digDepth;
         worker.scanCursor = 0;
+        worker.scanPeak = Integer.MAX_VALUE;
+        worker.scanPeakAcc = Integer.MIN_VALUE;
+        worker.treeColumnsScanned = 0;
         worker.target = null;
         worker.minePlan = null;
         worker.minePlanIndex = 0;
@@ -383,6 +403,7 @@ final class WorkerActions {
                 + second.toShortString() + " down to Y=" + worker.targetY);
         }
         String depthLabel = digDepth < 0 ? "to bedrock" : digDepth > 0 ? digDepth + " deep" : "clicked height";
+        long volume = (long) (maxX - minX + 1) * (top - bottom + 1) * (maxZ - minZ + 1);
         return ActionResult.ok("Work area set (" + depthLabel + ", " + volume + " blocks)");
     }
 
@@ -406,6 +427,7 @@ final class WorkerActions {
      * Auto-picks a plains small house when nothing is loaded yet.
      */
     static ActionResult startVillageOnPlot(ServerPlayer player, Worker worker) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Finish or dismantle the worker site first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (!"builder".equals(worker.role)) return ActionResult.fail("Only builders can build village houses");
@@ -459,6 +481,7 @@ final class WorkerActions {
     }
 
     static ActionResult prepareVillageHouse(ServerPlayer player, Worker worker, String entryId) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Finish or dismantle the worker site first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         if (!"builder".equals(worker.role)) return ActionResult.fail("Only builders can load village houses");
@@ -489,6 +512,7 @@ final class WorkerActions {
     }
 
     static ActionResult clearArea(ServerPlayer player, Worker worker) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         worker.first = null;
@@ -549,6 +573,7 @@ final class WorkerActions {
     }
 
     static ActionResult setOutput(ServerPlayer player, Worker worker, BlockPos pos) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         ActionResult range = requireNear(player, pos);
@@ -606,6 +631,7 @@ final class WorkerActions {
     }
 
     static ActionResult clearOutput(ServerPlayer player, Worker worker) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         worker.output = null;
@@ -923,6 +949,7 @@ final class WorkerActions {
     }
 
     static ActionResult loadBlueprint(ServerPlayer player, Worker worker, String name) {
+        if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Finish or dismantle the worker site first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
         String result;

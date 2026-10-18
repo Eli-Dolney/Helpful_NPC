@@ -3,7 +3,7 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.141'
 }
 
-version = '0.9.0'
+version = '1.0.0'
 group = 'com.example.helpfulworkers'
 base { archivesName = 'helpfulworkers' }
 
@@ -19,10 +19,17 @@ neoForge {
             systemProperty 'helpfulworkers.uishots', 'true'
             programArguments.addAll('--quickPlaySingleplayer', 'New World')
         }
+        // Isolated layout check: opens no world, checks menus at GUI scales 1-4 (see WorkerUiSmokeTest).
+        uiTest {
+            client()
+            gameDirectory = file('run/uitest')
+            systemProperty 'helpfulworkers.uiTest', 'true'
+        }
         server { server() }
         gameTestServer {
             type = "gameTestServer"
             systemProperty 'neoforge.enabledGameTestNamespaces', 'helpfulworkers'
+            gameDirectory = file('run/gametest')
         }
     }
     mods { helpfulworkers { sourceSet sourceSets.main } }

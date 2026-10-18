@@ -75,11 +75,13 @@ public final class WorkerRosterScreen extends Screen {
             if (creative) add(Component.translatable(Lang.ROSTER_TELEPORT), e.id(), "teleport", bx + (BUTTON_W + 4) * 2, y + 22, true);
         }
         int bottomY = panelTop() + panelHeight() - 24;
-        addRenderableWidget(Button.builder(Component.literal("▲"), b -> { scroll = Math.max(0, scroll - 1); rebuild(); })
+        var previous=addRenderableWidget(Button.builder(Component.literal("▲"), b -> { scroll = Math.max(0, scroll - 1); rebuild(); })
             .bounds(left + 12, bottomY, 30, 18).build());
-        addRenderableWidget(Button.builder(Component.literal("▼"), b -> {
+        previous.active=scroll>0;
+        var next=addRenderableWidget(Button.builder(Component.literal("▼"), b -> {
             scroll = Math.min(Math.max(0, entries.size() - visibleRows()), scroll + 1); rebuild();
         }).bounds(left + 46, bottomY, 30, 18).build());
+        next.active = scroll + rows < entries.size();
         addRenderableWidget(Button.builder(Component.translatable(Lang.ROSTER_REFRESH), b -> send(-1, "refresh"))
             .bounds(left + 80, bottomY, 60, 18).build());
         addRenderableWidget(Button.builder(Component.translatable(Lang.ROSTER_CLOSE), b -> onClose())
@@ -121,9 +123,7 @@ public final class WorkerRosterScreen extends Screen {
         int top = panelTop();
         int right = left + panelWidth();
         int bottom = top + panelHeight();
-        graphics.fill(left - 2, top - 2, right + 2, bottom + 2, 0xFF1A1A1A);
-        graphics.fill(left, top, right, bottom, 0xF0181C22);
-        graphics.fill(left, top, right, top + 3, 0xFFE0B04A);
+        WorkerUi.frame(graphics, left, top, panelWidth(), panelHeight());
         graphics.drawString(font, Component.translatable(Lang.ROSTER_TITLE, entries.size()), left + 12, top + 10, 0xFFFFFF, false);
         Component updates = Component.translatable(Lang.ROSTER_UPDATES);
         graphics.drawString(font, updates, right - 12 - font.width(updates), top + 10, 0xFF78909C, false);
@@ -148,7 +148,10 @@ public final class WorkerRosterScreen extends Screen {
             int state = stateColor(e.state());
             graphics.fill(left + 6, y - 2, left + 8, y + ROW_HEIGHT - 4, state);
             String key = WorkerActions.isRole(e.role()) ? e.role() : "idle";
-            graphics.blit(ResourceLocation.fromNamespaceAndPath(HelpfulWorkers.ID, "textures/gui/role_" + key + ".png"),
+            // Chosen skin's face when the worker is loaded here, else the role icon.
+            if (minecraft.level != null && minecraft.level.getEntity(e.id()) instanceof Worker worker)
+                WorkerAppearanceScreen.face(graphics, WorkerSkins.resolve(worker), left + 12, y + 2, 16);
+            else graphics.blit(ResourceLocation.fromNamespaceAndPath(HelpfulWorkers.ID, "textures/gui/role_" + key + ".png"),
                 left + 12, y + 2, 0, 0, 16, 16, 16, 16);
             int tx = left + 34;
             String lv = e.level() > 0 ? " · " + Component.translatable(Lang.LEVEL_SHORT, e.level()).getString() : "";
@@ -161,7 +164,9 @@ public final class WorkerRosterScreen extends Screen {
                 : Component.translatable(Lang.ROSTER_LAST_DROP, duration(e.sinceDrop())).getString());
             graphics.drawString(font, fit(where + drop, textWidth), tx, y + 26, 0xFF90A4AE, false);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
+                if (!entries.isEmpty()) graphics.drawString(font, Component.translatable(Lang.ROSTER_RANGE, scroll + 1,
+            Math.min(entries.size(), scroll + visibleRows()), entries.size()), left + 150, bottom - 19, WorkerUi.MUTED, false);
+        for (var widget : renderables) widget.render(graphics, mouseX, mouseY, partialTick);
         for (int i = 0; i < rows && scroll + i < entries.size(); i++) {
             WorkerNetwork.RosterEntry e = entries.get(scroll + i);
             int y = listTop() + i * ROW_HEIGHT;

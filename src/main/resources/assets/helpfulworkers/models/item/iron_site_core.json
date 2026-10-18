@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "helpfulworkers:item/iron_site_core"
+  }
+}

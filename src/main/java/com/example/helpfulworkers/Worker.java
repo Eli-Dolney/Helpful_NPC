@@ -72,7 +72,21 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     static final byte STATE_IDLE = 0, STATE_WORKING = 1, STATE_BLOCKED = 2, STATE_SLEEPING = 3;
     static final int STATUS_LINE_MAX = 40;
 
+    private static final net.minecraft.network.syncher.EntityDataAccessor<String> APPEARANCE_NAME = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.STRING);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<String> APPEARANCE_SKIN = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.STRING);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<Boolean> APPEARANCE_SLIM = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.BOOLEAN);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<java.util.Optional<UUID>> APPEARANCE_OWNER = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.OPTIONAL_UUID);
+    UUID skinOwner() { return entityData.get(APPEARANCE_OWNER).orElse(null); }
+    String personalName() { return entityData.get(APPEARANCE_NAME); }
+    String skinKey() { return entityData.get(APPEARANCE_SKIN); }
+    boolean slimSkin() { return entityData.get(APPEARANCE_SLIM); }
+    void setAppearance(String key, boolean slim) {
+        entityData.set(APPEARANCE_SKIN, WorkerAppearance.validSkin(key) ? key : "auto");
+        entityData.set(APPEARANCE_SLIM, slim);
+    }
     UUID owner;
+    UUID siteId, constructionId, supplyDeliveryWorker;
+    BlockPos supplyDelivery;
     String role = "idle";
     String mode = "excavate";
     String status = "Waiting for an assignment";
@@ -162,6 +176,10 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     final List<String> recipes = new ArrayList<>();
     final List<String> enabledCrops = new ArrayList<>(List.of("wheat", "carrots", "potatoes", "beetroots"));
     int scanCursor;
+    /** Large-area scan: highest terrain seen in the top layer of this pass (MAX = not known yet), and its running max. */
+    transient int scanPeak = Integer.MAX_VALUE, scanPeakAcc = Integer.MIN_VALUE;
+    /** Forester columns searched since the forest was last found empty (large areas keep looking instead of resting). */
+    transient int treeColumnsScanned;
     BlockPos target;
     /** Routes, stuck recovery and errands (fetch from supply, craft at table); not saved. */
     final WorkerNav nav = new WorkerNav(this);
@@ -211,6 +229,10 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         builder.define(DATA_XP, 0);
         builder.define(DATA_TRAIT, "");
         builder.define(DATA_RESERVES, "");
+        builder.define(APPEARANCE_NAME, "Worker");
+        builder.define(APPEARANCE_OWNER, java.util.Optional.empty());
+        builder.define(APPEARANCE_SKIN, "auto");
+        builder.define(APPEARANCE_SLIM, false);
     }
 
     /** Push the overhead line, state colour and role to tracking clients (sends only on change). */
@@ -451,6 +473,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     /** Flags synced to the dialogue UI for checkbox state. */
     List<String> collectFlags() {
         List<String> flags = new ArrayList<>();
+        if (siteId != null) flags.add("site");
         for (String crop : enabledCrops) flags.add("crop:" + crop);
         if (useBoneMeal) flags.add("bonemeal");
         for (String animal : ranchAnimals) flags.add("rancher:" + animal);
@@ -478,7 +501,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         return flags;
     }
 
-    public void setOwner(UUID owner) { this.owner = owner; }
+    public void setOwner(UUID owner) { this.owner = owner; entityData.set(APPEARANCE_OWNER, java.util.Optional.ofNullable(owner)); }
     public boolean owns(Player player) { return owner != null && owner.equals(player.getUUID()); }
     @Override public boolean removeWhenFarAway(double distanceToClosestPlayer) { return false; }
 
@@ -490,6 +513,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     void refreshDisplayName() {
         String base = baseName == null || baseName.isBlank() ? "Worker" : baseName;
         // The role now lives on the overhead status line drawn by WorkerRenderer.
+        entityData.set(APPEARANCE_NAME, base);
         setCustomName(Component.literal(base));
         setCustomNameVisible(true);
         pushClientData();
@@ -599,6 +623,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             greetedSleep = false;
         }
         if (WorkerSessions.isSuspended(this)) {
+            SiteJobs.suspend(this);
             getNavigation().stop();
             animator.clear(level);
             pushClientData();
@@ -606,6 +631,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         }
         greetNearbyOwner(level);
         if (recoverUntil > level.getGameTime()) {
+            SiteJobs.suspend(this);
             getNavigation().stop();
             setStatusKey(Lang.STATUS_RECOVERING_TIMER, (recoverUntil - level.getGameTime()) / 20);
             flushStatus();
@@ -624,9 +650,15 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         tryEatAndHeal(level);
         WorkerEquip.tick(level, this);
         if (WorkerActions.isCombatRole(role)) {
-            if (!working) working = true;
             // Gear fetched from the supply chest: walk it before falling back in with the owner.
             if (nav.hasErrand()) { nav.tickErrand(); flushStatus(); return; }
+            if (siteId != null) {
+                var site = SiteData.get(level).sites.get(siteId);
+                if (site == null || !getUUID().equals(site.worker) || !owner.equals(site.owner)) { SiteActions.release(level, this); return; }
+                if (site.paused || !working || !level.hasChunkAt(site.core()) || !level.getBlockState(site.core()).is(SiteBlocks.CORE.get())) {
+                    getNavigation().stop(); setTarget(null); setStatus("Guard site paused or unavailable"); flushStatus(); return;
+                }
+            } else if (!working) working = true;
             updateCombatStatus();
             flushStatus();
             return;
@@ -636,6 +668,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             // No bed or hall to potter around: stay near the spot where work stopped instead of drifting off.
             if (bed == null && hall == null && !hasRestriction() && !WorkerActions.isCombatRole(role)) restrictTo(blockPosition(), 6);
             maybeChatter(level);
+            SiteJobs.suspend(this);
             if (needsUnload && output == null && bed != null && level.isLoaded(bed)) {
                 if (!approachWithin(bed, 2, 2)) setStatusKey(Lang.STATUS_FULL_RETURNING);
                 else { getNavigation().stop(); setStatusKey(Lang.STATUS_FULL); }
@@ -659,6 +692,8 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
                 if (!Jobs.depositPublic(level, this)) { flushStatus(); return; }
                 greetedSleep = true;
             }
+            SiteJobs.suspend(this);
+            if (!level.isLoaded(bed)) { setStatus("Bed chunk unloaded"); flushStatus(); return; }
             if (!approachWithin(bed, 2, 2)) {
                 if (status.startsWith("Traveling")) setStatusKey(Lang.STATUS_GOING_HOME);
             } else {
@@ -669,7 +704,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             flushStatus();
             return;
         }
-        if (idleUntil > level.getGameTime() && "forester".equals(role)) {
+        if (siteId == null && idleUntil > level.getGameTime() && "forester".equals(role)) {
             if (nav.hasErrand()) nav.tickErrand();
             else setStatusKey(Lang.STATUS_WAITING_TREES, (idleUntil - level.getGameTime()) / 20);
             flushStatus();
@@ -739,7 +774,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     }
 
     boolean approach(BlockPos pos) {
-        return nav.approachWithin(pos, 3, 3, null);
+        return approachWithin(pos, 3, 3);
     }
 
     /**
@@ -748,11 +783,15 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
      * fetch, crafting trip) is walked first and makes this return false until it is done.
      */
     boolean approachWithin(BlockPos pos, double horizontal, double vertical) {
+        // Site and site-construction workers use the site router (visible stand spots, automatic
+        // retry, never a teleport); everyone else uses WorkerNav with errands and stuck recovery.
+        if (siteId != null || constructionId != null) return SiteNavigation.approach(this, pos, horizontal, vertical);
         return nav.approachWithin(pos, horizontal, vertical, null);
     }
 
     /** Approach a job block from a free stand spot beside it; true once it is within vanilla reach. */
     boolean approachStand(BlockPos target) {
+        if (siteId != null || constructionId != null) return SiteNavigation.approach(this, target, 3, 3);
         return nav.approachStand(target);
     }
 
@@ -814,11 +853,18 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         return new AreaBounds(minX, bottom, minZ, maxX, top, maxZ);
     }
 
+    /** Work areas up to 512 x 512 columns and 64M blocks (a 300 x 300 forest, a mountain to level, a pit to bedrock). */
+    static final int MAX_AREA_SIDE = 512;
+    static final long MAX_AREA_VOLUME = 64_000_000L;
+    static final long LARGE_AREA = 32768;
+
     record AreaBounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
         int dx() { return maxX - minX + 1; }
         int dy() { return maxY - minY + 1; }
         int dz() { return maxZ - minZ + 1; }
         long volume() { return (long) dx() * dy() * dz(); }
+        /** Above the old 32768-block limit: scanned with heightmap skips instead of block by block. */
+        boolean large() { return volume() > LARGE_AREA; }
     }
 
     void collect(ItemStack stack) {
@@ -885,7 +931,13 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     @Override public void addAdditionalSaveData(CompoundTag tag) {
         super.addAdditionalSaveData(tag);
         if (owner != null) tag.putUUID("Owner", owner);
+        if (siteId != null) tag.putUUID("SiteId", siteId);
+        if (supplyDelivery != null) tag.putLong("SupplyDelivery", supplyDelivery.asLong());
+        if (supplyDeliveryWorker != null) tag.putUUID("SupplyDeliveryWorker",supplyDeliveryWorker);
+        if (constructionId != null) tag.putUUID("ConstructionId", constructionId);
         if (baseName != null && !baseName.isBlank()) tag.putString("BaseName", baseName);
+        tag.putString("WorkerSkin", skinKey());
+        tag.putBoolean("WorkerSkinSlim", slimSkin());
         tag.putString("Role", role); tag.putString("Mode", mode); tag.putString("Status", status);
         tag.putString("CompanionMode", companionMode == null ? "follow" : companionMode);
         tag.putBoolean("Working", working); tag.putBoolean("UseBoneMeal", useBoneMeal);
@@ -997,7 +1049,12 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
 
     @Override public void readAdditionalSaveData(CompoundTag tag) {
         super.readAdditionalSaveData(tag);
-        if (tag.hasUUID("Owner")) owner = tag.getUUID("Owner");
+        if (tag.hasUUID("Owner")) setOwner(tag.getUUID("Owner"));
+        setAppearance(tag.contains("WorkerSkin") ? tag.getString("WorkerSkin") : "auto", tag.getBoolean("WorkerSkinSlim"));
+        siteId = tag.hasUUID("SiteId") ? tag.getUUID("SiteId") : null;
+        supplyDelivery = tag.contains("SupplyDelivery") ? BlockPos.of(tag.getLong("SupplyDelivery")) : null;
+        supplyDeliveryWorker = tag.hasUUID("SupplyDeliveryWorker") ? tag.getUUID("SupplyDeliveryWorker") : null;
+        constructionId = tag.hasUUID("ConstructionId") ? tag.getUUID("ConstructionId") : null;
         role = tag.contains("Role") && !tag.getString("Role").isEmpty() ? tag.getString("Role") : "idle";
         mode = tag.contains("Mode") && !tag.getString("Mode").isEmpty() ? tag.getString("Mode") : "excavate";
         status = tag.contains("Status") && !tag.getString("Status").isEmpty() ? tag.getString("Status") : "Waiting for an assignment";
@@ -1165,6 +1222,12 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             if ("stay".equals(mode)) {
                 worker.getNavigation().stop();
                 return;
+            }
+            if(worker.siteId!=null && worker.level() instanceof ServerLevel l) {
+                var site=SiteData.get(l).sites.get(worker.siteId);
+                if(site==null || site.paused || !worker.working || !site.active()) { worker.getNavigation().stop();return; }
+                BlockPos post=site.template.isEmpty() ? (worker.role.equals("archer")?site.at(4,6,4):site.entrance()):site.station();
+                worker.approachWithin(post,1,1); return;
             }
             if ("guard".equals(mode)) {
                 Worker.AreaBounds box = worker.areaBounds();

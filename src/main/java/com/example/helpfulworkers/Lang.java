@@ -53,6 +53,7 @@ final class Lang {
     static final String ROSTER_LAST_DROP = "gui.helpfulworkers.roster.last_drop";
     static final String ROSTER_NEVER_DROPPED = "gui.helpfulworkers.roster.never_dropped";
     static final String ROSTER_SUMMARY = "gui.helpfulworkers.roster.summary";
+    static final String ROSTER_RANGE = "gui.helpfulworkers.roster.range";
 
     // Worker status lines (server sets them with Worker.setStatusKey; clients translate)
     static final String STATUS_REQUEST = "status.helpfulworkers.request";
@@ -66,6 +67,7 @@ final class Lang {
     static final String STATUS_NO_REACHABLE_WORK = "status.helpfulworkers.no_reachable_work";
     static final String STATUS_CHOOSE_ROLE = "status.helpfulworkers.choose_role";
     static final String STATUS_FOREST_QUIET = "status.helpfulworkers.forest_quiet";
+    static final String STATUS_SEARCHING_FOREST = "status.helpfulworkers.searching_forest";
     static final String STATUS_BONE_MEALED_SAPLING = "status.helpfulworkers.bone_mealed_sapling";
     static final String STATUS_AREA_TOO_LARGE = "status.helpfulworkers.area_too_large";
     static final String STATUS_TREE_CHUNK_UNLOADED = "status.helpfulworkers.tree_chunk_unloaded";
@@ -196,6 +198,8 @@ final class Lang {
 
     // Dialogue pages (keys under gui.helpfulworkers.dialogue)
     static final String D_BACK = "gui.helpfulworkers.dialogue.back";
+    static final String D_PREVIOUS = "gui.helpfulworkers.dialogue.previous";
+    static final String D_NEXT = "gui.helpfulworkers.dialogue.next";
     static final String D_CANCEL = "gui.helpfulworkers.dialogue.cancel";
     static final String D_CLEAR = "gui.helpfulworkers.dialogue.clear";
     static final String D_ANY = "gui.helpfulworkers.dialogue.any";
@@ -215,15 +219,28 @@ final class Lang {
     static final String MAIN_WHERE = "gui.helpfulworkers.dialogue.main.where";
     static final String MAIN_OUTLINE = "gui.helpfulworkers.dialogue.main.outline";
     static final String MAIN_EQUIP = "gui.helpfulworkers.dialogue.main.equip";
+    static final String MAIN_EQUIP_SHORT = "gui.helpfulworkers.dialogue.main.equip_short";
     static final String MAIN_RECIPE = "gui.helpfulworkers.dialogue.main.recipe";
     static final String MAIN_HOUSE = "gui.helpfulworkers.dialogue.main.house";
     static final String MAIN_BLUEPRINTS = "gui.helpfulworkers.dialogue.main.blueprints";
     static final String MAIN_BYE = "gui.helpfulworkers.dialogue.main.bye";
+    static final String MAIN_SITE_BUILD = "gui.helpfulworkers.dialogue.main.site_build";
+    static final String MAIN_SITE_MANAGE = "gui.helpfulworkers.dialogue.main.site_manage";
+    static final String MAIN_SITE_JOIN = "gui.helpfulworkers.dialogue.main.site_join";
+    static final String MAIN_SITE_TIP = "gui.helpfulworkers.dialogue.main.site_tip";
+    static final String MAIN_APPEARANCE = "gui.helpfulworkers.dialogue.main.appearance";
+    static final String WORK_SITE_MANAGE = "gui.helpfulworkers.dialogue.work.site_manage";
+    static final String WORK_SITE_TIP = "gui.helpfulworkers.dialogue.work.site_tip";
+    static final String LOC_SITE = "gui.helpfulworkers.dialogue.loc.site";
+    static final String BUILD_SITES = "gui.helpfulworkers.dialogue.build.sites";
+    static final String BUILD_SITES_TIP = "gui.helpfulworkers.dialogue.build.sites_tip";
     static final String WORK_PAUSE = "gui.helpfulworkers.dialogue.work.pause";
     static final String WORK_START = "gui.helpfulworkers.dialogue.work.start";
     static final String WORK_HOME = "gui.helpfulworkers.dialogue.work.home";
     static final String WORK_CANCEL_DIG = "gui.helpfulworkers.dialogue.work.cancel_dig";
     static final String WORK_REDRAW_DIG = "gui.helpfulworkers.dialogue.work.redraw_dig";
+    static final String WORK_CLEAR_AREA = "gui.helpfulworkers.dialogue.work.clear_area";
+    static final String WORK_REDRAW_AREA = "gui.helpfulworkers.dialogue.work.redraw_area";
     static final String WORK_CHANGE_JOB = "gui.helpfulworkers.dialogue.work.change_job";
     static final String DEPTH_BEDROCK = "gui.helpfulworkers.dialogue.work.depth_bedrock";
     static final String DEPTH_BLOCKS = "gui.helpfulworkers.dialogue.work.depth_blocks";
@@ -413,6 +430,7 @@ final class Lang {
         }
         for (int n = 1; n <= CHATTER_LINES; n++) keys.add(chatterKey(n));
         for (String path : WorkerConfig.CONFIG_PATHS) keys.add(HelpfulWorkers.ID + ".configuration." + path);
+        for (String path : SiteSettings.configPaths()) keys.add(HelpfulWorkers.ID + ".configuration." + path);
         return keys;
     }
 }

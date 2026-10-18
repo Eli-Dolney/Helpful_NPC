@@ -1,4 +1,4 @@
-# Verification report — Helpful Workers 0.9.0
+# Verification report — Helpful Workers 1.0.0
 
 ## Automated / performed here
 
@@ -6,6 +6,15 @@
 - JAR: `build/libs/helpfulworkers-0.2.0.jar`
 - Dedicated `runServer` smoke: mod listed as **Helpful Workers 0.2.0**, recipes loaded, server reached **Done**, no `ClientHooks` / `NoClassDefFoundError` during startup.
 - Game-test source is present in `WorkerGameTests.java` (ownership, kits, clipboard cancel, cross-worker menu isolation, unsupported recipes, 0.1-style NBT). These were not executed in a game-test server run in this session.
+
+## 1.0.0 (merge of 0.5.3 worker sites into 0.9.0) — performed 2026-10-18
+
+- `./gradlew build runGameTestServer`: build succeeded, JAR `build/libs/helpfulworkers-1.0.0.jar`; **all 82 required game tests passed on five runs in a row** (each capped at 200 s): 46 from 0.9.0, 34 from 0.5.3 (`SiteGameTests`, `Site05GameTests`, `ConstructionGameTests`, `WorkerAppearanceGameTests`) and 2 new.
+- New tests: `largeAreaSizesAllowed` (300 × 300 forest, 64 × 64 pit to bedrock and a mountain area accepted; wider than 512 or more than 64M blocks rejected), `largeAreaScanSkipsAirAndJumpsLayers` (200 empty layers skipped from the heightmap, the stone found in one budgeted call).
+- Changed test: `farmerRancherFisherAndSmelterUseSites` (0.5.3) now waits for the smelter to load the site furnace, because since 0.9 the smelter walks to the supply chest first.
+- Harness: new `GameTestWatchdog` (game-test server only) keeps a one-chunk margin forced around every test plot and re-forces chunks of tests that never started. With 82 tests on a wider grid, walking tests at the edge of the grid got no path ("path=none") and failed in about one run in three; the same tests passed every time with the baseline 46-test layout, and with the margin they pass in every run (3/3 with the 0.9.0-only set, 5/5 with all tests). The "test never starts" hang seen in 0.9.0 was not seen since.
+- **Client layout check** `./gradlew runUiTest` (0.5.3's isolated client, adapted to the 0.9 dialogue pages): **112 screens passed at GUI scales 1–4** (no off-screen or overlapping controls, keyboard focus, last recipe and blueprint reachable). Fixed on the way: saved blueprints scroll instead of showing three, the recipe Back button no longer runs off the panel, short screens get Previous/Next sections, and the dialogue header and status strip were drawn under a second background blur. Screenshots reviewed: Talk tab with *Worker sites* / *Name & look*, Work tab of a site worker (*Manage my site*), the site catalog.
+- Not played in a world: building a site in survival (core cost) and assigning a worker from the dialogue, a 300 × 300 forester or a mountain terraform end to end (scan speed and walking over long distances), warehouses next to 0.9 shared-chest claims, skins with role outfits, loading a 0.5.3 world and a 0.9.0 world in 1.0.0.
 
 ## 0.8.0 follow-up: dialogue and greeting strings moved to lang keys — performed 2026-10-18
 

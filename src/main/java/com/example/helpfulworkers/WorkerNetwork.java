@@ -25,7 +25,10 @@ final class WorkerNetwork {
 
     @SubscribeEvent
     static void register(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("3");
+        // Both 0.9.0 (protocol 3) and 0.5.3 (protocol 5) changed payloads; the merged build is 6.
+        PayloadRegistrar registrar = event.registrar("6");
+        SiteNetwork.register(registrar);
+        WorkerAppearanceNetwork.register(registrar);
         registrar.playToClient(OpenDialoguePayload.TYPE, OpenDialoguePayload.STREAM_CODEC, WorkerNetwork::handleOpenDialogue);
         registrar.playToClient(CloseDialoguePayload.TYPE, CloseDialoguePayload.STREAM_CODEC, WorkerNetwork::handleCloseDialogue);
         registrar.playToClient(WorkerStatusPayload.TYPE, WorkerStatusPayload.STREAM_CODEC, WorkerNetwork::handleStatus);

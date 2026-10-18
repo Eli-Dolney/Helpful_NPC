@@ -15,6 +15,13 @@ final class WorkerCommands {
 
     static void register(RegisterCommandsEvent event) {
         var root = Commands.literal("worker").requires(source -> source.getEntity() instanceof ServerPlayer);
+        root.then(Commands.literal("site").executes(ctx -> withWorker(ctx.getSource().getPlayer(), w -> { SiteUi.openWorker(ctx.getSource().getPlayer(), w); return 1; })));
+        root.then(Commands.literal("warehouse").executes(ctx -> {
+            ServerPlayer p = ctx.getSource().getPlayer();
+            var hit = p.pick(8, 0, false);
+            if (hit instanceof BlockHitResult block) SiteUi.openCore(p, block.getBlockPos());
+            return 1;
+        }));
         root.then(Commands.literal("status").executes(ctx -> withWorker(ctx.getSource().getPlayer(),
             w -> msg(ctx.getSource().getPlayer(), WorkerActions.status(ctx.getSource().getPlayer(), w)))));
         root.then(Commands.literal("start").executes(ctx -> withWorker(ctx.getSource().getPlayer(),
@@ -42,13 +49,10 @@ final class WorkerCommands {
                     com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "depth")))))));
         root.then(Commands.literal("area").then(Commands.argument("first", BlockPosArgument.blockPos())
             .then(Commands.argument("second", BlockPosArgument.blockPos()).executes(ctx -> withWorker(ctx.getSource().getPlayer(), w -> {
-                try {
-                    BlockPos first = BlockPosArgument.getLoadedBlockPos(ctx, "first");
-                    BlockPos second = BlockPosArgument.getLoadedBlockPos(ctx, "second");
-                    return msg(ctx.getSource().getPlayer(), WorkerActions.setArea(ctx.getSource().getPlayer(), w, first, second));
-                } catch (com.mojang.brigadier.exceptions.CommandSyntaxException ex) {
-                    return msg(ctx.getSource().getPlayer(), ActionResult.fail("Area corners must be loaded"));
-                }
+                // Large areas: the far corner may be unloaded; setArea needs only one loaded corner.
+                BlockPos first = BlockPosArgument.getBlockPos(ctx, "first");
+                BlockPos second = BlockPosArgument.getBlockPos(ctx, "second");
+                return msg(ctx.getSource().getPlayer(), WorkerActions.setArea(ctx.getSource().getPlayer(), w, first, second));
             })))));
         root.then(Commands.literal("bind").then(Commands.argument("kind", StringArgumentType.word()).suggests((ctx,builder) -> {
             for (String kind : new String[]{"bed","supply","output","table"}) builder.suggest(kind);

@@ -38,6 +38,10 @@ public final class AssignmentClipboardItem extends Item {
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
+        if (player instanceof ServerPlayer sp && SiteUi.pending(sp)) {
+            if (player.isShiftKeyDown()) { SiteUi.close(sp); say(player, "Site assignment cancelled"); }
+            return InteractionResultHolder.consume(stack);
+        }
         if (!level.isClientSide && player.isShiftKeyDown() && player instanceof ServerPlayer serverPlayer
             && WorkerSessions.getClipboard(serverPlayer) != null) {
             WorkerSessions.clearClipboard(serverPlayer);

@@ -25,7 +25,7 @@ final class WorkerRegistry extends SavedData {
     private static final String DATA_NAME = "helpfulworkers_registry";
 
     record Entry(UUID entityId, UUID owner, String role, String name, ResourceKey<Level> dimension,
-                 BlockPos pos, boolean alive) {}
+                 BlockPos pos, boolean alive, BlockPos bed, BlockPos supply, BlockPos output) {}
 
     private final Map<UUID, Entry> byEntity = new HashMap<>();
 
@@ -67,7 +67,7 @@ final class WorkerRegistry extends SavedData {
         WorkerRegistry reg = get(level);
         reg.byEntity.put(worker.getUUID(), new Entry(
             worker.getUUID(), worker.owner, worker.role == null ? "idle" : worker.role,
-            worker.getName().getString(), level.dimension(), worker.blockPosition().immutable(), true));
+            worker.getName().getString(), level.dimension(), worker.blockPosition().immutable(), true, worker.bed, worker.supply, worker.output));
         reg.setDirty();
     }
 
@@ -76,7 +76,7 @@ final class WorkerRegistry extends SavedData {
         Entry old = reg.byEntity.get(entityId);
         if (old == null) return;
         reg.byEntity.put(entityId, new Entry(old.entityId, old.owner, old.role, old.name,
-            old.dimension, old.pos, false));
+            old.dimension, old.pos, false, old.bed, old.supply, old.output));
         reg.setDirty();
     }
 
@@ -93,7 +93,7 @@ final class WorkerRegistry extends SavedData {
         Entry old = reg.byEntity.get(worker.getUUID());
         if (old != null) {
             reg.byEntity.put(worker.getUUID(), new Entry(old.entityId, old.owner, worker.role,
-                worker.getName().getString(), level.dimension(), worker.blockPosition().immutable(), false));
+                worker.getName().getString(), level.dimension(), worker.blockPosition().immutable(), worker.isAlive(), worker.bed, worker.supply, worker.output));
             reg.setDirty();
         }
     }
@@ -117,6 +117,7 @@ final class WorkerRegistry extends SavedData {
         }
     }
 
+    static BlockPos readPos(CompoundTag t,String key) { return t.contains(key)?BlockPos.of(t.getLong(key)):null; }
     WorkerRegistry() {}
 
     private static WorkerRegistry load(CompoundTag tag, HolderLookup.Provider provider) {
@@ -133,7 +134,7 @@ final class WorkerRegistry extends SavedData {
             BlockPos pos = e.contains("Pos") ? BlockPos.of(e.getLong("Pos")) : BlockPos.ZERO;
             UUID id = e.getUUID("Id");
             reg.byEntity.put(id, new Entry(id, e.getUUID("Owner"), e.getString("Role"), e.getString("Name"),
-                dim, pos, e.getBoolean("Alive")));
+                dim, pos, e.getBoolean("Alive"), readPos(e,"Bed"), readPos(e,"Supply"), readPos(e,"Output")));
         }
         return reg;
     }
@@ -150,6 +151,9 @@ final class WorkerRegistry extends SavedData {
             t.putString("Dim", e.dimension.location().toString());
             t.putLong("Pos", e.pos.asLong());
             t.putBoolean("Alive", e.alive);
+            if(e.bed!=null) t.putLong("Bed",e.bed.asLong());
+            if(e.supply!=null) t.putLong("Supply",e.supply.asLong());
+            if(e.output!=null) t.putLong("Output",e.output.asLong());
             list.add(t);
         }
         tag.put("Workers", list);

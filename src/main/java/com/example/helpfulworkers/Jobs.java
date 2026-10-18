@@ -42,6 +42,7 @@ final class Jobs {
         try {
             // A pending supply fetch or crafting trip comes before the job target.
             if (worker.nav.tickErrand()) return;
+            if (SiteJobs.tick(level, worker)) { worker.markWorkFound(); return; }
             if ("builder".equals(worker.role)) { Blueprints.tick(level, worker); worker.markWorkFound(); return; }
             if ("smelter".equals(worker.role)) { ExtraJobs.smelter(level, worker); return; }
             if ("courier".equals(worker.role)) {
@@ -134,7 +135,16 @@ final class Jobs {
             log = trunk;
             break;
         }
+        Worker.AreaBounds forest = worker.areaBounds();
+        if (log == null && forest != null && forest.large() && worker.treeColumnsScanned < forest.dx() * forest.dz()) {
+            // A big forest is searched a budget of columns per work tick; only rest once all of it was empty.
+            worker.setStatusKey(Lang.STATUS_SEARCHING_FOREST,
+                (int) (100L * worker.treeColumnsScanned / ((long) forest.dx() * forest.dz())));
+            worker.markWorkFound();
+            return;
+        }
         if (log == null) {
+            worker.treeColumnsScanned = 0;
             // Go home / deposit and wait
             if (worker.output != null && hasDepositableLoot(worker)) {
                 if (!deposit(level, worker)) return;
@@ -148,6 +158,7 @@ final class Jobs {
             worker.markIdle();
             return;
         }
+        worker.treeColumnsScanned = 0; // found one: the forest only counts as empty after a full pass without trees
         if (!worker.approachStand(log)) return;
         if (!fell(level, worker, log)) return;
         worker.treeIndex.remove(log);
@@ -166,6 +177,7 @@ final class Jobs {
         int budget = WorkerConfig.scanBudget();
         int columns = box.dx() * box.dz();
         for (int checked = 0; checked < Math.min(columns, budget * 4); checked++) {
+            worker.treeColumnsScanned++;
             int index = Math.floorMod(worker.scanCursor++, columns);
             int x = box.minX() + index % box.dx();
             int z = box.minZ() + index / box.dx();
@@ -343,7 +355,7 @@ final class Jobs {
         Worker.AreaBounds box = worker.areaBounds();
         if (box == null) return null;
         long volume = box.volume();
-        if (volume > 32768) { worker.setStatusKey(Lang.STATUS_AREA_TOO_LARGE); worker.working = false; return null; }
+        if (volume > Worker.MAX_AREA_VOLUME) { worker.setStatusKey(Lang.STATUS_AREA_TOO_LARGE); worker.working = false; return null; }
         int dx = box.dx(), dy = box.dy(), dz = box.dz();
         int budget = WorkerConfig.scanBudget();
 
@@ -368,6 +380,7 @@ final class Jobs {
 
         boolean terraform = "miner".equals(worker.role) && "terraform".equals(worker.mode);
         boolean quarry = "miner".equals(worker.role) && "quarry".equals(worker.mode);
+        if (box.large()) return findLarge(level, worker, box, terraform, quarry, budget);
         for (int checked = 0; checked < Math.min(volume, budget * 4L); checked++) {
             int index = Math.floorMod(worker.scanCursor++, (int) volume);
             int yOff = dy - 1 - index / (dx * dz);
@@ -376,6 +389,53 @@ final class Jobs {
             BlockPos pos = new BlockPos(box.minX() + xOff, box.minY() + yOff, box.minZ() + zOff);
             if (!level.isLoaded(pos)) continue;
             // Excavate/branches keep the bottom layer as a floor; a quarry lays its own cobble floor.
+            if ("miner".equals(worker.role) && !terraform && !quarry && yOff == 0 && dy > 1) continue;
+            if ("miner".equals(worker.role) && "branches".equals(worker.mode)
+                && ((yOff != 1 && yOff != 2) || (zOff != dz / 2 && xOff % 4 != 0))) continue;
+            if ("farmer".equals(worker.role) && needsWaterCheck(level, worker, pos)
+                && !nearWaterCached(level, worker, pos)) continue;
+            if (eligible(level, worker, pos) && !worker.isUnreachable(pos)) return pos;
+        }
+        return null;
+    }
+
+    /**
+     * Budgeted top-down scan for areas above 32768 blocks. Positions above the terrain surface are
+     * skipped from the heightmap (cheap, up to 256x the block budget per call); after the top layer of
+     * a pass the highest surface is known, so empty layers above it are jumped over.
+     */
+    static BlockPos findLarge(ServerLevel level, Worker worker, Worker.AreaBounds box, boolean terraform, boolean quarry, int budget) {
+        int dx = box.dx(), dy = box.dy(), dz = box.dz();
+        int layer = dx * dz;
+        int volume = (int) box.volume();
+        int real = 0, cheap = 0, realMax = budget * 4, cheapMax = budget * 256;
+        while (real < realMax && cheap < cheapMax) {
+            int index = Math.floorMod(worker.scanCursor, volume);
+            int layerIndex = index % layer;
+            if (index == 0) { worker.scanPeak = Integer.MAX_VALUE; worker.scanPeakAcc = Integer.MIN_VALUE; }
+            else if (layerIndex == 0) {
+                if (index == layer) worker.scanPeak = worker.scanPeakAcc;
+                int y = box.minY() + dy - 1 - index / layer;
+                if (worker.scanPeak != Integer.MAX_VALUE && y > worker.scanPeak) {
+                    // Nothing but air down to the highest terrain: go straight to that layer (or end the pass).
+                    int peakOff = worker.scanPeak - box.minY();
+                    worker.scanCursor = peakOff < 0 ? 0 : (dy - 1 - peakOff) * layer;
+                    if (peakOff < 0) return null;
+                    cheap++;
+                    continue;
+                }
+            }
+            worker.scanCursor++;
+            int yOff = dy - 1 - index / layer;
+            int zOff = layerIndex / dx;
+            int xOff = layerIndex % dx;
+            int x = box.minX() + xOff, z = box.minZ() + zOff, y = box.minY() + yOff;
+            if (!level.hasChunk(x >> 4, z >> 4)) { cheap++; continue; }
+            int surface = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, x, z) - 1;
+            if (yOff == dy - 1) worker.scanPeakAcc = Math.max(worker.scanPeakAcc, surface);
+            if (y > surface) { cheap++; continue; }
+            real++;
+            BlockPos pos = new BlockPos(x, y, z);
             if ("miner".equals(worker.role) && !terraform && !quarry && yOff == 0 && dy > 1) continue;
             if ("miner".equals(worker.role) && "branches".equals(worker.mode)
                 && ((yOff != 1 && yOff != 2) || (zOff != dz / 2 && xOff % 4 != 0))) continue;
@@ -1336,23 +1396,14 @@ final class Jobs {
             if (!worker.nav.hasErrand()) worker.setStatusKey(Lang.STATUS_RETURNING_LOOT);
             return false;
         }
-        BlockEntity entity = level.getBlockEntity(worker.output);
-        if (!(entity instanceof Container chest)) { worker.setStatusKey(Lang.STATUS_OUTPUT_CHEST_MISSING); return false; }
+        Container chest = StorageOps.at(level, worker.output);
+        if (chest == null) { worker.setStatusKey(Lang.STATUS_OUTPUT_CHEST_MISSING); return false; }
         for (int i = 0; i < worker.bag.getContainerSize(); i++) {
             ItemStack stack = worker.bag.getItem(i);
-            if (stack.isEmpty() || isTool(stack) || isFurnaceHaul(worker, stack)) continue;
-            int depositLimit = stack.getCount();
-            int reserve = worker.reserveFor(stack);
-            if (reserve > 0) {
-                int total = countItem(worker, stack.getItem());
-                int excess = total - reserve;
-                if (excess <= 0) continue;
-                depositLimit = Math.min(stack.getCount(), excess);
-            }
-            ItemStack moving = stack.copyWithCount(depositLimit);
-            WorkerStorage.insert(chest, moving);
-            stack.shrink(depositLimit - moving.getCount());
-            if (stack.isEmpty()) worker.bag.setItem(i, ItemStack.EMPTY);
+            if (stack.isEmpty() || isFurnaceHaul(worker, stack)) continue;
+            // Shared export boundary: tools, role supplies and owner reserves stay in the bag.
+            int limit = StorageOps.exportable(worker, i);
+            if (limit > 0) StorageOps.move(worker.bag, i, chest, limit);
         }
         chest.setChanged();
         if (bagFull(worker)) {

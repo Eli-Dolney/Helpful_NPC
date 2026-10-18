@@ -46,6 +46,7 @@ public final class WorkerDialogueScreen extends Screen {
     private final List<String> blueprints = new ArrayList<>();
     private final Set<String> flags = new HashSet<>();
     private int recipeScroll;
+    private int blueprintScroll;
     private String pendingCaptureName = "";
     private boolean suppressClosePacket;
 
@@ -269,6 +270,16 @@ public final class WorkerDialogueScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (sectionPages > 1 && page != Page.RECIPES && page != Page.BLUEPRINT && scrollY != 0) {
+            int target = Math.max(0, Math.min(sectionPages - 1, sectionPage - (int) Math.signum(scrollY)));
+            if (target != sectionPage) { sectionPage = target; rebuild(); }
+            return true;
+        }
+        if (page == Page.BLUEPRINT && scrollY != 0) {
+            blueprintScroll = Math.max(0, blueprintScroll - (int) Math.signum(scrollY));
+            rebuild();
+            return true;
+        }
         if (page == Page.RECIPES && scrollY != 0) {
             recipeScroll = Math.max(0, recipeScroll - (int) Math.signum(scrollY));
             rebuild();
@@ -332,6 +343,76 @@ public final class WorkerDialogueScreen extends Screen {
             case ROUTES -> buildRoutes(left, top);
             case REQUESTS -> buildRequests(left, top);
         }
+        paginate(left);
+    }
+
+    private int sectionPage, sectionPages = 1;
+    private Page lastPage;
+
+    /**
+     * Short screens: when a page's rows run past the content area, keep whole rows together on
+     * Previous/Next sections (with their icons) instead of letting controls fall off the panel.
+     */
+    private void paginate(int left) {
+        if (lastPage != page) { sectionPage = 0; lastPage = page; }
+        sectionPages = 1;
+        var rows = new java.util.TreeMap<Integer, List<net.minecraft.client.gui.components.AbstractWidget>>();
+        for (var child : children()) {
+            // Text boxes keep their place (they are reused across rebuilds); everything else is paged.
+            if (child instanceof net.minecraft.client.gui.components.AbstractWidget w && w.getY() >= contentTop() - 2
+                && !(w instanceof net.minecraft.client.gui.components.EditBox)) {
+                rows.computeIfAbsent(w.getY(), k -> new ArrayList<>()).add(w);
+            }
+        }
+        if (rows.isEmpty()) return;
+        // Later sections start below any fixed text box (name, search) at the top of the content.
+        int start = contentTop();
+        for (var child : children()) {
+            if (child instanceof net.minecraft.client.gui.components.EditBox box && box.getY() >= contentTop() - 2) {
+                start = Math.max(start, box.getY() + box.getHeight() + 4);
+            }
+        }
+        int last = rows.lastEntry().getValue().stream().mapToInt(w -> w.getY() + w.getHeight()).max().orElse(0);
+        if (last <= contentBottom()) return;
+        int limit = contentBottom() - 24; // room for the Previous/Next row
+        List<Integer> rowYs = new ArrayList<>(rows.keySet());
+        int[] pageOf = new int[rowYs.size()];
+        int[] newY = new int[rowYs.size()];
+        int pageIndex = 0, y = rowYs.get(0);
+        for (int i = 0; i < rowYs.size(); i++) {
+            int height = rows.get(rowYs.get(i)).stream().mapToInt(net.minecraft.client.gui.components.AbstractWidget::getHeight).max().orElse(20);
+            if (i > 0) y += Math.max(height + 2, Math.min(rowYs.get(i) - rowYs.get(i - 1), height + 8));
+            if (y + height > limit && i > 0 && y != start) { pageIndex++; y = start; }
+            pageOf[i] = pageIndex;
+            newY[i] = y;
+        }
+        sectionPages = pageIndex + 1;
+        sectionPage = Math.max(0, Math.min(sectionPage, sectionPages - 1));
+        List<Icon> moved = new ArrayList<>();
+        for (int i = 0; i < rowYs.size(); i++) {
+            int oldY = rowYs.get(i);
+            int height = rows.get(oldY).stream().mapToInt(net.minecraft.client.gui.components.AbstractWidget::getHeight).max().orElse(20);
+            for (Icon icon : icons) {
+                if (icon.y() >= oldY && icon.y() < oldY + height && pageOf[i] == sectionPage) {
+                    moved.add(new Icon(icon.texture(), icon.stack(), icon.x(), icon.y() - oldY + newY[i]));
+                }
+            }
+            for (var w : rows.get(oldY)) {
+                if (pageOf[i] == sectionPage) w.setY(newY[i]);
+                else removeWidget(w);
+            }
+        }
+        icons.removeIf(icon -> icon.y() >= contentTop() - 2);
+        icons.addAll(moved);
+        int py = contentBottom() - 20;
+        Button previous = Button.builder(Component.translatable(Lang.D_PREVIOUS), b -> { sectionPage--; rebuild(); })
+            .bounds(left + 12, py, 80, 20).build();
+        previous.active = sectionPage > 0;
+        addRenderableWidget(previous);
+        Button next = Button.builder(Component.translatable(Lang.D_NEXT), b -> { sectionPage++; rebuild(); })
+            .bounds(left + panelWidth() - 92, py, 80, 20).build();
+        next.active = sectionPage < sectionPages - 1;
+        addRenderableWidget(next);
     }
 
     private void buildMain(int left, int top) {
@@ -366,9 +447,8 @@ public final class WorkerDialogueScreen extends Screen {
         }
         choice(left + 12, y, Component.translatable(Lang.MAIN_WHERE), b -> { page = Page.LOCATIONS; rebuild(); });
         y += 24;
-        choice(left + 12, y, Component.translatable(Lang.MAIN_OUTLINE), b -> send("show_outline", ""));
-        y += 24;
-        choice(left + 12, y, Component.translatable(Lang.MAIN_EQUIP), b -> send("open_inventory", ""));
+        half(left + 12, y, Component.translatable(Lang.MAIN_OUTLINE), b -> send("show_outline", ""));
+        half(left + 142, y, Component.translatable(Lang.MAIN_EQUIP_SHORT), b -> send("open_inventory", ""));
         y += 24;
         if ("builder".equals(role) || "miner".equals(role) || "farmer".equals(role) || "forester".equals(role)) {
             choice(left + 12, y, Component.translatable(Lang.MAIN_RECIPE), b -> {
@@ -386,11 +466,34 @@ public final class WorkerDialogueScreen extends Screen {
             });
             y += 24;
         }
+        // 0.5.3 worker sites and appearance: opened in their own screens (SiteScreen, WorkerAppearanceScreen).
+        if (hasSiteType()) {
+            String key = "builder".equals(role) ? Lang.MAIN_SITE_BUILD : flags.contains("site") ? Lang.MAIN_SITE_MANAGE : Lang.MAIN_SITE_JOIN;
+            addRenderableWidget(Button.builder(Component.translatable(key), b -> send("sites", ""))
+                .tooltip(Tooltip.create(Component.translatable(Lang.MAIN_SITE_TIP))).bounds(left + 12, y, 122, 20).build());
+        }
+        half(left + 142, y, Component.translatable(Lang.MAIN_APPEARANCE), b -> openAppearance());
+        y += 24;
         choice(left + 12, y, Component.translatable(Lang.MAIN_BYE), b -> { send("close", ""); onClose(); });
+    }
+
+    /** Roles that have a builder-placed site type (the gatherer has none yet). */
+    private boolean hasSiteType() {
+        return WorkerActions.isRole(role) && !"gatherer".equals(role);
+    }
+
+    private void openAppearance() {
+        if (minecraft != null && minecraft.level != null && minecraft.level.getEntity(workerId) instanceof Worker worker) {
+            minecraft.setScreen(new WorkerAppearanceScreen(worker, this));
+        }
     }
 
     private void choice(int x, int y, Component label, Button.OnPress press) {
         addRenderableWidget(Button.builder(label, press).bounds(x, y, 252, 20).build());
+    }
+
+    private void half(int x, int y, Component label, Button.OnPress press) {
+        addRenderableWidget(Button.builder(label, press).bounds(x, y, 122, 20).build());
     }
 
     /** A real checkbox; the server's reply (status flags) rebuilds the page, so it always shows the saved state. */
@@ -409,10 +512,17 @@ public final class WorkerDialogueScreen extends Screen {
         addRenderableWidget(Button.builder(Component.translatable(Lang.WORK_HOME), b -> send("home", ""))
             .bounds(left + 142, y, 122, 20).build());
         y += 24;
-        addRenderableWidget(Button.builder(Component.translatable(Lang.WORK_CANCEL_DIG), b -> send("clear_assign", "area"))
-            .bounds(left + 12, y, 122, 20).build());
-        addRenderableWidget(Button.builder(Component.translatable(Lang.WORK_REDRAW_DIG), b -> send("redraw_area", ""))
-            .bounds(left + 142, y, 122, 20).build());
+        if (flags.contains("site")) {
+            // The site sets the work area; zone drawing comes back once the site is released.
+            addRenderableWidget(Button.builder(Component.translatable(Lang.WORK_SITE_MANAGE), b -> send("sites", ""))
+                .tooltip(Tooltip.create(Component.translatable(Lang.WORK_SITE_TIP))).bounds(left + 12, y, 252, 20).build());
+        } else {
+            boolean miner = "miner".equals(role);
+            addRenderableWidget(Button.builder(Component.translatable(miner ? Lang.WORK_CANCEL_DIG : Lang.WORK_CLEAR_AREA), b -> send("clear_assign", "area"))
+                .bounds(left + 12, y, 122, 20).build());
+            addRenderableWidget(Button.builder(Component.translatable(miner ? Lang.WORK_REDRAW_DIG : Lang.WORK_REDRAW_AREA), b -> send("redraw_area", ""))
+                .bounds(left + 142, y, 122, 20).build());
+        }
         y += 28;
         choice(left + 12, y, Component.translatable(Lang.WORK_CHANGE_JOB), b -> { page = Page.ROLE; rebuild(); });
         y += 28;
@@ -660,6 +770,13 @@ public final class WorkerDialogueScreen extends Screen {
 
     private void buildLocations(int left, int top) {
         int y = contentTop();
+        if (flags.contains("site")) {
+            // Site workers only choose a bed; the site supplies area and storage.
+            y = assignRow(left, y, Component.translatable(Lang.LOC_BED), "bed", hasBed);
+            choice(left + 12, y, Component.translatable(Lang.LOC_SITE), b -> send("sites", ""));
+            addBack(left, y + 28);
+            return;
+        }
         if ("knight".equals(role) || "archer".equals(role)) {
             y = assignRow(left, y, Component.translatable(Lang.LOC_GUARD), "area", hasArea);
             y = assignRow(left, y, Component.translatable(Lang.LOC_BED), "bed", hasBed);
@@ -728,11 +845,13 @@ public final class WorkerDialogueScreen extends Screen {
         int y = contentTop() + 36;
         int shown = 0;
         int skipped = 0;
+        // Up to five rows, fewer when the screen is short so the scroll row stays visible.
+        int rows = Math.max(1, Math.min(5, (contentBottom() - y - 24) / 22));
         for (WorkerNetwork.RecipeEntry entry : recipes) {
             if (!query.isEmpty() && !entry.outputName().toLowerCase(Locale.ROOT).contains(query)
                 && !entry.id().toLowerCase(Locale.ROOT).contains(query)) continue;
             if (skipped++ < recipeScroll) continue;
-            if (shown >= 5) break;
+            if (shown >= rows) break;
             String prefix = entry.approved() ? "[OK] " : entry.supported() ? "[ ] " : "[X] ";
             String text = prefix + entry.outputName();
             WorkerNetwork.RecipeEntry captured = entry;
@@ -753,11 +872,15 @@ public final class WorkerDialogueScreen extends Screen {
         addRenderableWidget(Button.builder(Component.translatable(Lang.D_DOWN), b -> {
             recipeScroll += 5; rebuild();
         }).bounds(left + 88, y, 70, 20).build());
-        addBack(left + 164, y);
+        addRenderableWidget(Button.builder(Component.translatable(Lang.D_BACK), b -> { page = Page.MAIN; rebuild(); })
+            .bounds(left + 164, y, 100, 20).build());
     }
 
     private void buildBuild(int left, int top) {
         int y = contentTop();
+        addRenderableWidget(Button.builder(Component.translatable(Lang.BUILD_SITES), b -> send("sites", ""))
+            .tooltip(Tooltip.create(Component.translatable(Lang.BUILD_SITES_TIP))).bounds(left + 12, y, 252, 20).build());
+        y += 24;
         addRenderableWidget(Button.builder(Component.translatable(Lang.BUILD_STYLE, Component.translatable(Lang.biomeKey(villageBiome))), b -> {
             page = Page.BIOME; rebuild();
         }).bounds(left + 12, y, 122, 20).build());
@@ -874,9 +997,12 @@ public final class WorkerDialogueScreen extends Screen {
         }).bounds(left + 12, y, 252, 20).build());
         y += 22;
         int shown = 0;
-        for (String name : blueprints) {
-            if (BuilderPresets.isPreset(name)) continue;
-            if (shown >= 3) break;
+        // Up to three rows that fit above Back; the mouse wheel scrolls through every saved blueprint.
+        List<String> saved = blueprints.stream().filter(n -> !BuilderPresets.isPreset(n)).toList();
+        int rows = Math.max(1, Math.min(3, (contentBottom() - y - 4) / 22));
+        blueprintScroll = Math.max(0, Math.min(blueprintScroll, saved.size() - rows));
+        for (String name : saved.subList(Math.min(blueprintScroll, saved.size()), saved.size())) {
+            if (shown >= rows) break;
             String label = (name.equals(blueprint) ? "● " : "") + name;
             addRenderableWidget(Button.builder(Component.translatable(Lang.BP_LOAD, trim(label, 24)), b -> send("load_blueprint", name))
                 .bounds(left + 12, y, 252, 20).build());
@@ -989,7 +1115,9 @@ public final class WorkerDialogueScreen extends Screen {
         if (minecraft != null && minecraft.level != null) {
             var entity = minecraft.level.getEntity(workerId);
             if (entity != null) {
-                skin = net.minecraft.client.resources.DefaultPlayerSkin.get(entity.getUUID()).texture();
+                // The look chosen on the Name & appearance screen (or the original default skin).
+                skin = entity instanceof Worker worker ? WorkerSkins.resolve(worker).texture()
+                    : net.minecraft.client.resources.DefaultPlayerSkin.get(entity.getUUID()).texture();
                 graphics.blit(skin, x, y, 36, 36, 8, 8, 8, 8, 64, 64);
                 graphics.blit(skin, x, y, 36, 36, 40, 8, 8, 8, 64, 64);
                 return;
@@ -1063,7 +1191,8 @@ public final class WorkerDialogueScreen extends Screen {
                 left + 12, contentTop() - 2, 0xFF90A4AE, false);
         }
         drawStatusStrip(graphics, left, top);
-        super.render(graphics, mouseX, mouseY, partialTick);
+        // Not super.render: that would blur the background again, over the header and status text.
+        for (var widget : renderables) widget.render(graphics, mouseX, mouseY, partialTick);
         drawTabUnderline(graphics, top);
         for (Icon icon : icons) {
             if (icon.stack() != null) graphics.renderItem(icon.stack(), icon.x(), icon.y());

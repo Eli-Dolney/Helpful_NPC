@@ -103,6 +103,18 @@ Ideas to pick from once the above is stable: worker levels (faster breaking / be
 
 ---
 
+## 1.0.0 — one mod (merge of the worker-sites line and 0.9.0) — 2026-10-18
+
+GitHub `main` (0.5.3, worker sites) and this line (0.4–0.9) split after 0.3.1; the 0.9.0 commit had been stacked on 0.5.3 while deleting its files, so 0.5.3 was re-applied with a 3-way cherry-pick (base 0.3.1) rather than `git merge`, which was a no-op.
+
+1. [x] **Both feature sets in one build.** Sites (Site Frame, mining/logging/warehouse/farm/ranch/fishing/smelter/builder/guard cores, construction that costs a core in survival, Instant Build, custom site templates), warehouses with supply delivery, managed trees and ore nodes, ownership markers, names and skins, plus everything from 0.4–0.9. Registry ids and NBT keys of both lines kept; network protocol 6.
+2. [x] **Reachable from the 0.9 dialogue.** Talk tab: *Worker sites* / *Work at a site* / *My site*, *Name & look*. Build tab: *Build a worker site…* (catalog and custom site templates). Site workers' Work/Where tabs show *Manage my site* instead of area drawing. The 0.5.3 four-tab menu layer was not kept (its pager rewrote buttons and could not hold checkboxes or translated labels); a light row pager now keeps 0.9 pages usable on short screens.
+3. [x] **Shared systems joined.** Drop-offs and warehouse pickups use one export rule (`StorageOps.exportable`) that honours `/worker keep` reserves first; site/construction workers route with `SiteNavigation`, zone workers with `WorkerNav`; skins render under the role outfits.
+4. [x] **Large areas.** Up to 512 × 512 columns and 64M blocks (was 32,768 blocks). Areas above 32,768 blocks scan top-down with heightmap skips and empty-layer jumps; foresters keep searching a big forest before resting. `/worker area` and the clipboard accept a far corner that is no longer loaded.
+5. [ ] **Follow-ups.** Translate the server-built site menus (`SiteUi`, site statuses) and `ActionResult` toasts; a gatherer site type; multi-worker sharing of one huge area (several foresters on one 300 × 300 forest split by `scanCursor` ranges); in-world play of everything listed under "Not played" in `VERIFICATION.md`.
+
+---
+
 ## Working conventions for every phase
 
 - Keep registry ids and NBT keys; new fields default sensibly (follow the `SitePrep` legacy-save pattern).

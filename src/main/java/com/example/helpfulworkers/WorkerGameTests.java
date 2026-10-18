@@ -922,6 +922,37 @@ public final class WorkerGameTests {
         helper.succeed();
     }
 
+    /** 1.0: work areas far above the old 32768-block cap are allowed (a 300 x 300 forest, a mountain, a pit to bedrock). */
+    @GameTest(template = "empty")
+    public static void largeAreaSizesAllowed(GameTestHelper helper) {
+        helper.assertTrue(WorkerActions.areaSizeError(300, 40, 300) == null, "300 x 300 forest allowed");
+        helper.assertTrue(WorkerActions.areaSizeError(64, 384, 64) == null, "64 x 64 pit from the top to bedrock allowed");
+        helper.assertTrue(WorkerActions.areaSizeError(200, 150, 200) == null, "mountain levelling area allowed");
+        helper.assertTrue(WorkerActions.areaSizeError(600, 10, 10) != null, "footprint wider than 512 rejected");
+        helper.assertTrue(WorkerActions.areaSizeError(512, 384, 512) != null, "more than 64M blocks rejected");
+        helper.succeed();
+    }
+
+    /** The large-area scan skips the air above the terrain from the heightmap and jumps empty layers. */
+    @GameTest(template = "empty")
+    public static void largeAreaScanSkipsAirAndJumpsLayers(GameTestHelper helper) {
+        walledFloor(helper);
+        helper.setBlock(new BlockPos(3, 2, 4), Blocks.STONE);
+        Worker worker = spawnWorker(helper, new BlockPos(2, 2, 2));
+        worker.role = "miner";
+        worker.mode = "terraform";
+        BlockPos low = helper.absolutePos(new BlockPos(1, 2, 1));
+        BlockPos high = helper.absolutePos(new BlockPos(6, 202, 6));
+        Worker.AreaBounds box = new Worker.AreaBounds(low.getX(), low.getY(), low.getZ(), high.getX(), high.getY(), high.getZ());
+        worker.scanCursor = 0;
+        // Budget 8 = 32 block checks and 2048 heightmap skips per call; 200 empty layers of 36 columns
+        // would need four calls without the layer jump.
+        BlockPos found = Jobs.findLarge(helper.getLevel(), worker, box, true, false, 8);
+        helper.assertTrue(helper.absolutePos(new BlockPos(3, 2, 4)).equals(found), "stone found in one call, got " + found);
+        helper.assertTrue(worker.scanPeak == low.getY(), "peak is the stone's height after the top layer");
+        helper.succeed();
+    }
+
     /** With no cobblestone in the supply, a miner fetches it from its own output chest. */
     @GameTest(template = "empty")
     public static void minerSealsWithCobbleFromOutput(GameTestHelper helper) {

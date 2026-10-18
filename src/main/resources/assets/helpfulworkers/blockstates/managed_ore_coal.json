@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "helpfulworkers:block/managed_ore_coal"
+    }
+  }
+}
