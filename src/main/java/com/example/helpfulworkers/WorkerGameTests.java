@@ -992,6 +992,31 @@ public final class WorkerGameTests {
         helper.succeed();
     }
 
+    /** The whole "Let me show you where" → assign area → click two corners flow sets a miner's and a forester's area. */
+    @GameTest(template = "empty")
+    public static void dialogueAreaAssignmentSetsArea(GameTestHelper helper) {
+        walledFloor(helper);
+        for (String role : new String[]{"miner", "forester"}) {
+            ServerPlayer player = helper.makeMockServerPlayerInLevel();
+            player.getAbilities().instabuild = false;
+            player.getInventory().add(new ItemStack(HelpfulWorkers.CLIPBOARD.get()));
+            player.moveTo(helper.absoluteVec(new net.minecraft.world.phys.Vec3(3.5, 2, 3.5)));
+            Worker worker = spawnWorker(helper, new BlockPos(2, 2, 2));
+            worker.setOwner(player.getUUID());
+            worker.role = role;
+            WorkerSessions.openViewer(player, worker, WorkerSessions.ViewerKind.DIALOGUE);
+            DialogueHandlers.handle(player, new WorkerNetwork.DialogueActionPayload(worker.getId(), "start_assign", "area"));
+            helper.assertTrue(WorkerSessions.getClipboard(player) != null, role + ": clipboard session started");
+            AssignmentClipboardItem.handleClick(player, helper.absolutePos(new BlockPos(1, 1, 1)), Direction.UP);
+            player.tickCount++; // a new tick, as between two real clicks
+            AssignmentClipboardItem.handleClick(player, helper.absolutePos(new BlockPos(5, 1, 5)), Direction.UP);
+            helper.assertTrue(worker.first != null && worker.second != null,
+                role + ": area set after two corners (mode " + worker.mode + ", status " + worker.status + ")");
+            helper.assertTrue(WorkerSessions.getClipboard(player) == null, role + ": clipboard session finished");
+        }
+        helper.succeed();
+    }
+
     static int count(net.minecraft.world.Container chest, net.minecraft.world.item.Item item) {
         int n = 0;
         for (int i = 0; i < chest.getContainerSize(); i++) if (chest.getItem(i).is(item)) n += chest.getItem(i).getCount();
