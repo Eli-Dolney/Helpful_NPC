@@ -3,7 +3,7 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.141'
 }
 
-version = '0.5.3'
+version = '1.1.0'
 group = 'com.example.helpfulworkers'
 base { archivesName = 'helpfulworkers' }
 
@@ -13,6 +13,13 @@ neoForge {
     version = '21.1.235'
     runs {
         client { client() }
+        // Dev UI check: opens "New World" and screenshots every mod screen into run/screenshots (see UiShots).
+        uiShots {
+            client()
+            systemProperty 'helpfulworkers.uishots', 'true'
+            programArguments.addAll('--quickPlaySingleplayer', 'New World')
+        }
+        // Isolated layout check: opens no world, checks menus at GUI scales 1-4 (see WorkerUiSmokeTest).
         uiTest {
             client()
             gameDirectory = file('run/uitest')

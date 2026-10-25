@@ -31,6 +31,12 @@ public final class HelpfulWorkers {
     public static final Items ITEMS = DeferredRegister.createItems(ID);
     public static final DeferredRegister<CreativeModeTab> TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, ID);
     public static final DeferredRegister<MenuType<?>> MENUS = DeferredRegister.create(Registries.MENU, ID);
+    public static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(ID);
+
+    public static final net.neoforged.neoforge.registries.DeferredBlock<TownHallBlock> TOWN_HALL = BLOCKS.register("town_hall",
+        () -> new TownHallBlock(net.minecraft.world.level.block.state.BlockBehaviour.Properties.of()
+            .mapColor(net.minecraft.world.level.material.MapColor.WOOD).strength(2.5f, 6.0f)
+            .sound(net.minecraft.world.level.block.SoundType.WOOD)));
 
     public static final DeferredHolder<EntityType<?>, EntityType<Worker>> WORKER = ENTITIES.register("worker",
         () -> EntityType.Builder.of(Worker::new, MobCategory.CREATURE).sized(0.6f, 1.8f).clientTrackingRange(8).build("helpfulworkers:worker"));
@@ -57,6 +63,15 @@ public final class HelpfulWorkers {
         () -> new RoleKitItem(new Item.Properties().stacksTo(1), "smelter"));
     public static final DeferredItem<Item> COURIER_KIT = ITEMS.register("couriers_kit",
         () -> new RoleKitItem(new Item.Properties().stacksTo(1), "courier"));
+    public static final DeferredItem<Item> GATHERER_KIT = ITEMS.register("gatherers_kit",
+        () -> new RoleKitItem(new Item.Properties().stacksTo(1), "gatherer"));
+    public static final DeferredItem<Item> TOOLSMITH_KIT = ITEMS.register("toolsmiths_kit",
+        () -> new RoleKitItem(new Item.Properties().stacksTo(1), "toolsmith"));
+    public static final DeferredItem<Item> STONEMASON_KIT = ITEMS.register("stonemasons_kit",
+        () -> new RoleKitItem(new Item.Properties().stacksTo(1), "stonemason"));
+    public static final DeferredItem<Item> COOK_KIT = ITEMS.register("cooks_kit",
+        () -> new RoleKitItem(new Item.Properties().stacksTo(1), "cook"));
+    public static final DeferredItem<net.minecraft.world.item.BlockItem> TOWN_HALL_ITEM = ITEMS.registerSimpleBlockItem(TOWN_HALL);
     public static final DeferredItem<Item> CLIPBOARD = ITEMS.register("assignment_clipboard",
         () -> new AssignmentClipboardItem(new Item.Properties().stacksTo(1)));
 
@@ -78,17 +93,28 @@ public final class HelpfulWorkers {
                 output.accept(FISHER_KIT.get());
                 output.accept(SMELTER_KIT.get());
                 output.accept(COURIER_KIT.get());
+                output.accept(GATHERER_KIT.get());
+                output.accept(TOOLSMITH_KIT.get());
+                output.accept(STONEMASON_KIT.get());
+                output.accept(COOK_KIT.get());
                 output.accept(CLIPBOARD.get());
+                output.accept(TOWN_HALL_ITEM.get());
                 SiteBlocks.CORES.values().forEach(item -> output.accept(item.get()));
             }).build());
 
     public HelpfulWorkers(IEventBus bus, ModContainer container) {
+        BLOCKS.register(bus);
         SiteBlocks.BLOCKS.register(bus);
+        WorkerSounds.SOUNDS.register(bus);
         ENTITIES.register(bus);
         ITEMS.register(bus);
         TABS.register(bus);
         MENUS.register(bus);
         container.registerConfig(ModConfig.Type.SERVER, WorkerConfig.SPEC);
+        container.registerConfig(ModConfig.Type.CLIENT, WorkerConfig.CLIENT_SPEC);
+        if (net.neoforged.fml.loading.FMLEnvironment.dist == net.neoforged.api.distmarker.Dist.CLIENT) {
+            ClientModEvents.registerConfigScreen(container);
+        }
         bus.addListener(this::attributes);
         NeoForge.EVENT_BUS.addListener(WorkerCommands::register);
         WorkerSessions.register();

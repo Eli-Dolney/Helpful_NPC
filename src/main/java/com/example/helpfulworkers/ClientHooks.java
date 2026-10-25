@@ -68,10 +68,10 @@ final class ClientHooks {
         AreaOutlineClient.show(payload);
     }
 
-    static void toast(String message) {
+    static void toast(Component message) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null) {
-            mc.player.displayClientMessage(Component.literal(message), true);
+            mc.player.displayClientMessage(message, true);
         }
     }
 }

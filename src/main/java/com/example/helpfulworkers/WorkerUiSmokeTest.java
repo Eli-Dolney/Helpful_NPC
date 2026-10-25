@@ -20,7 +20,7 @@ final class WorkerUiSmokeTest {
         for(int scale:new int[]{1,2,3,4}) {
             for(String role:new String[]{"miner","forester","farmer","builder","rancher","fisher","smelter","courier","knight","archer"})
                 CASES.add(new Case(role,"WORK",scale));
-            for(String page:new String[]{"MAIN","LOCATIONS","MANAGE","ROLE","CROPS","RANCH","BUILD","BLUEPRINT","SITE","SITE_ASSIGNED","RECIPES","DEPTH","PROTECT","TARGET_Y","BIOME","ROLE_CONFIRM","CAPTURE_CONFIRM","CULL_CONFIRM","MESSAGE"})
+            for(String page:new String[]{"MAIN","LOCATIONS","ROLE","CROPS","RANCH","BUILD","BLUEPRINT","SITE","SITE_ASSIGNED","RECIPES","DEPTH","PROTECT","TARGET_Y","BIOME","ROLE_CONFIRM","CAPTURE_CONFIRM","CULL_CONFIRM","MESSAGE"})
                 CASES.add(new Case(page.equals("CROPS")?"farmer":page.equals("RANCH")?"rancher":"builder",page,scale));
         }
     }
@@ -67,12 +67,17 @@ final class WorkerUiSmokeTest {
             check(mc);visited++;
             for(var element:mc.screen.children())if(element instanceof AbstractWidget widget)labels.add(widget.getMessage().getString());
             var next=mc.screen.children().stream().filter(e->e instanceof Button b && b.active && b.getMessage().getString().equals("Next >")).map(e->(Button)e).findFirst();
-            if(next.isEmpty())break;
-            if(visited>200)throw new IllegalStateException("Pagination did not reach the end");
-            next.get().onPress();
+            if(next.isPresent()) { if(visited>200)throw new IllegalStateException("Pagination did not reach the end"); next.get().onPress(); continue; }
+            // Long lists (recipes, blueprints) scroll with the mouse wheel in the 1.0 dialogue.
+            if(visited>60)break;
+            int before=labels.size();
+            mc.screen.mouseScrolled(mc.screen.width/2.0,mc.screen.height/2.0,0,-1);
+            for(var element:mc.screen.children())if(element instanceof AbstractWidget widget)labels.add(widget.getMessage().getString());
+            if(labels.size()==before)break;
         }
         if(CASES.get(index).page.equals("RECIPES") && labels.stream().noneMatch(s->s.contains("Test recipe 24")))throw new IllegalStateException("Last recipe is unreachable");
         if(CASES.get(index).page.equals("BLUEPRINT") && labels.stream().noneMatch(s->s.contains("Saved house 19")))throw new IllegalStateException("Last blueprint is unreachable");
+        for(int i=0;i<60;i++)mc.screen.mouseScrolled(mc.screen.width/2.0,mc.screen.height/2.0,0,1);
         while(true) {
             var previous=mc.screen.children().stream().filter(e->e instanceof Button b && b.active && b.getMessage().getString().equals("< Previous")).map(e->(Button)e).findFirst();
             if(previous.isEmpty())break;previous.get().onPress();

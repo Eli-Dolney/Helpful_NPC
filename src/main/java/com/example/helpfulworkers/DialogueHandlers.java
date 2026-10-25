@@ -3,7 +3,6 @@ package com.example.helpfulworkers;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.SimpleMenuProvider;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 final class DialogueHandlers {
     private DialogueHandlers() {}
@@ -11,7 +10,7 @@ final class DialogueHandlers {
     static void handle(ServerPlayer player, WorkerNetwork.DialogueActionPayload payload) {
         Worker worker = WorkerActions.findOwned(player, payload.workerId());
         if (worker == null) {
-            WorkerNetwork.toast(player, "Worker not found");
+            WorkerNetwork.toast(player, Component.translatable(Lang.TOAST_NOT_FOUND));
             return;
         }
         String action = payload.action();
@@ -68,6 +67,46 @@ final class DialogueHandlers {
             case "toggle_bonemeal" -> WorkerActions.toggleBoneMeal(player, worker);
             case "toggle_ranch_animal" -> WorkerActions.toggleRanchAnimal(player, worker, arg);
             case "toggle_ranch_flag" -> WorkerActions.toggleRanchFlag(player, worker, arg);
+            case "add_request" -> {
+                ActionResult menu = WorkerActions.requireMenu(player, worker);
+                if (menu != null) yield menu;
+                int count;
+                try { count = Integer.parseInt(arg.trim()); }
+                catch (NumberFormatException ex) { yield ActionResult.fail("Invalid count"); }
+                yield WorkerActions.addRequest(player, worker, player.getMainHandItem(), count);
+            }
+            case "remove_request" -> {
+                ActionResult menu = WorkerActions.requireMenu(player, worker);
+                if (menu != null) yield menu;
+                yield WorkerActions.removeRequest(player, worker, arg);
+            }
+            case "clear_requests" -> {
+                ActionResult menu = WorkerActions.requireMenu(player, worker);
+                if (menu != null) yield menu;
+                yield WorkerActions.clearRequests(player, worker);
+            }
+            case "toggle_request_stop" -> {
+                ActionResult menu = WorkerActions.requireMenu(player, worker);
+                if (menu != null) yield menu;
+                yield WorkerActions.toggleRequestStop(player, worker);
+            }
+            case "cycle_tool_target" -> WorkerActions.cycleToolTarget(player, worker, arg);
+            case "add_order" -> {
+                ActionResult menu = WorkerActions.requireMenu(player, worker);
+                if (menu != null) yield menu;
+                int count;
+                try { count = Integer.parseInt(arg.trim()); }
+                catch (NumberFormatException ex) { yield ActionResult.fail("Invalid count"); }
+                yield WorkerActions.addOrder(player, worker, player.getMainHandItem(), count);
+            }
+            case "remove_order" -> WorkerActions.removeOrder(player, worker, arg);
+            case "clear_orders" -> WorkerActions.clearOrders(player, worker);
+            case "toggle_supply_builders" -> WorkerActions.toggleSupplyBuilders(player, worker);
+            case "toggle_cook_flag" -> WorkerActions.toggleCookFlag(player, worker, arg);
+            case "toggle_pickup_filter" -> WorkerActions.togglePickupFilter(player, worker, arg, player.getMainHandItem());
+            case "clear_pickup_filter" -> WorkerActions.clearPickupFilter(player, worker, arg);
+            case "cycle_pickup_keep" -> WorkerActions.cyclePickupKeep(player, worker, arg);
+            case "remove_pickup" -> WorkerActions.removePickup(player, worker, arg);
             case "start_cull" -> WorkerActions.startCull(player, worker, false);
             case "start_cull_sword" -> WorkerActions.startCull(player, worker, true);
             case "load_preset" -> {
@@ -75,6 +114,16 @@ final class DialogueHandlers {
                 if (menu != null) yield menu;
                 if (!"builder".equals(worker.role)) yield ActionResult.fail("Only builders can load presets");
                 yield WorkerActions.prepareVillageHouse(player, worker, arg);
+            }
+            case "set_siteprep" -> {
+                ActionResult menu = WorkerActions.requireMenu(player, worker);
+                if (menu != null) yield menu;
+                yield WorkerActions.setSitePrep(player, worker, arg);
+            }
+            case "flatten_plot" -> {
+                ActionResult menu = WorkerActions.requireMenu(player, worker);
+                if (menu != null) yield menu;
+                yield WorkerActions.flattenPlot(player, worker);
             }
             case "build_on_plot" -> {
                 ActionResult menu = WorkerActions.requireMenu(player, worker);
@@ -89,11 +138,11 @@ final class DialogueHandlers {
             case "open_inventory" -> {
                 ActionResult menu = WorkerActions.requireMenu(player, worker);
                 if (menu != null) yield menu;
-                PacketDistributor.sendToPlayer(player, new WorkerNetwork.CloseDialoguePayload());
+                WorkerNetwork.send(player, new WorkerNetwork.CloseDialoguePayload());
                 WorkerSessions.closeViewer(player);
                 player.openMenu(new SimpleMenuProvider(
                     (id, inv, p) -> new WorkerInventoryMenu(id, inv, worker),
-                    Component.literal(worker.getName().getString() + " Equipment")),
+                    Component.translatable(Lang.INV_TITLE, worker.getName().getString())),
                     buf -> buf.writeVarInt(worker.getId()));
                 WorkerSessions.openViewer(player, worker, WorkerSessions.ViewerKind.INVENTORY);
                 yield ActionResult.ok("Opened equipment");
@@ -165,7 +214,7 @@ final class DialogueHandlers {
         };
         if (!"close".equals(action)) {
             WorkerNetwork.toast(player, result.text());
-            PacketDistributor.sendToPlayer(player, WorkerNetwork.WorkerStatusPayload.from(worker));
+            WorkerNetwork.send(player, WorkerNetwork.WorkerStatusPayload.from(worker));
         }
     }
 
@@ -184,6 +233,9 @@ final class DialogueHandlers {
             case "origin" -> WorkerSessions.ClipboardKind.BUILD_ORIGIN;
             case "furnace" -> WorkerSessions.ClipboardKind.FURNACE;
             case "pickup" -> WorkerSessions.ClipboardKind.PICKUP;
+            case "anvil" -> WorkerSessions.ClipboardKind.ANVIL;
+            case "grindstone" -> WorkerSessions.ClipboardKind.GRINDSTONE;
+            case "stonecutter" -> WorkerSessions.ClipboardKind.STONECUTTER;
             default -> null;
         };
         if (clipboardKind == null) return ActionResult.fail("Unknown assignment");
@@ -197,7 +249,7 @@ final class DialogueHandlers {
         session.villageBuild = "village_plot".equals(kind) || ("area".equals(kind) && "builder".equals(worker.role));
         player.closeContainer();
         WorkerSessions.closeViewer(player);
-        PacketDistributor.sendToPlayer(player, new WorkerNetwork.CloseDialoguePayload());
+        WorkerNetwork.send(player, new WorkerNetwork.CloseDialoguePayload());
         boolean plannedMine = "miner".equals(worker.role) && WorkerActions.isPlannedMineMode(worker.mode);
         player.displayClientMessage(Component.literal(session.villageBuild
             ? "Mark a house plot for " + worker.getName().getString()
@@ -229,6 +281,7 @@ final class DialogueHandlers {
             case "origin" -> WorkerActions.clearOrigin(player, worker);
             case "furnace" -> WorkerActions.clearFurnaces(player, worker);
             case "pickup" -> WorkerActions.clearPickups(player, worker);
+            case "anvil", "grindstone", "stonecutter" -> WorkerActions.clearWorkstation(player, worker, kind);
             default -> ActionResult.fail("Unknown clear target");
         };
     }

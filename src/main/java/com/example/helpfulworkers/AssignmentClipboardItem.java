@@ -96,7 +96,7 @@ public final class AssignmentClipboardItem extends Item {
             session.pendingConfirm = clicked.immutable();
             highlight(level, session.pendingFirst);
             highlight(level, clicked);
-            if ("terraform".equals(worker.mode) && "miner".equals(worker.role)) {
+            if (WorkerActions.usesDigDepth(worker.mode) && "miner".equals(worker.role)) {
                 session.awaitingDepth = true;
                 WorkerNetwork.openDepthPicker(player, worker, session.pendingFirst, session.pendingConfirm);
                 say(player, "Footprint marked. Choose how deep to dig.");
@@ -111,7 +111,7 @@ public final class AssignmentClipboardItem extends Item {
                     say(player, build.text());
                 } else if (!"builder".equals(worker.role)) {
                     worker.working = true;
-                    worker.status = "Working";
+                    worker.setStatusKey(Lang.STATUS_WORKING);
                     say(player, result.text() + ". " + worker.getName().getString() + " started.");
                 } else {
                     say(player, "Copy area marked from " + first.toShortString() + " to " + clicked.toShortString()
@@ -154,6 +154,12 @@ public final class AssignmentClipboardItem extends Item {
                 ? ActionResult.ok("ok") : ActionResult.fail("Look at a chest or other inventory");
             case BUILD_ORIGIN -> worker.blueprintBlocks.isEmpty()
                 ? ActionResult.fail("Capture or load a blueprint first") : ActionResult.ok("ok");
+            case ANVIL -> state.getBlock() instanceof net.minecraft.world.level.block.AnvilBlock
+                ? ActionResult.ok("ok") : ActionResult.fail("Look at an anvil");
+            case GRINDSTONE -> state.is(net.minecraft.world.level.block.Blocks.GRINDSTONE)
+                ? ActionResult.ok("ok") : ActionResult.fail("Look at a grindstone");
+            case STONECUTTER -> state.is(net.minecraft.world.level.block.Blocks.STONECUTTER)
+                ? ActionResult.ok("ok") : ActionResult.fail("Look at a stonecutter");
             case AREA -> ActionResult.ok("ok");
             default -> ActionResult.fail("Unknown assignment");
         };
@@ -169,6 +175,9 @@ public final class AssignmentClipboardItem extends Item {
             case BUILD_ORIGIN -> WorkerActions.setBuildOrigin(player, worker, session.pendingConfirm);
             case FURNACE -> WorkerActions.addFurnace(player, worker, session.pendingConfirm);
             case PICKUP -> WorkerActions.addPickup(player, worker, session.pendingConfirm);
+            case ANVIL -> WorkerActions.setWorkstation(player, worker, "anvil", session.pendingConfirm);
+            case GRINDSTONE -> WorkerActions.setWorkstation(player, worker, "grindstone", session.pendingConfirm);
+            case STONECUTTER -> WorkerActions.setWorkstation(player, worker, "stonecutter", session.pendingConfirm);
             default -> ActionResult.fail("Unknown assignment");
         };
     }

@@ -46,21 +46,22 @@ final class WorkerCombat {
 
     static void knockOut(ServerLevel level, Worker worker) {
         worker.setHealth(Math.max(1f, worker.getMaxHealth() * 0.5f));
+        worker.resumeAfterRecovery = worker.working || WorkerActions.isCombatRole(worker.role);
         worker.working = false;
         worker.target = null;
         worker.getNavigation().stop();
         worker.recoverUntil = level.getGameTime() + 20L * 60L;
-        worker.setStatus("Recovering at home");
+        worker.setStatusKey(Lang.STATUS_RECOVERING_HOME);
         BlockPos dest = worker.bed;
         if (dest != null && level.isLoaded(dest)) {
-            if (!worker.hopNear(dest)) {
+            if (!worker.nav.teleportBeside(dest)) {
                 worker.teleportTo(dest.getX() + 0.5, dest.getY(), dest.getZ() + 0.5);
             }
         } else {
             var owner = worker.findOwner();
             if (owner != null) {
                 BlockPos near = owner.blockPosition();
-                if (!worker.hopNear(near)) {
+                if (!worker.nav.teleportBeside(near)) {
                     worker.teleportTo(owner.getX(), owner.getY(), owner.getZ());
                 }
             }

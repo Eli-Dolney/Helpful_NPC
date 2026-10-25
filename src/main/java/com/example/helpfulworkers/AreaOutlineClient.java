@@ -1,15 +1,25 @@
 package com.example.helpfulworkers;
 
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.particles.DustParticleOptions;
-import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
-import org.joml.Vector3f;
+import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
+/**
+ * Draws a worker's work area as a thin line box, with coloured boxes around its bed (blue),
+ * supply (yellow), output (green) and crafting table (orange). Shown for the configured time
+ * after "Show my work area", and kept up while the owner sneaks with the clipboard in hand.
+ */
 @EventBusSubscriber(modid = HelpfulWorkers.ID, bus = EventBusSubscriber.Bus.GAME, value = Dist.CLIENT)
 final class AreaOutlineClient {
     private static WorkerNetwork.AreaOutlinePayload outline;
@@ -19,59 +29,57 @@ final class AreaOutlineClient {
 
     static void show(WorkerNetwork.AreaOutlinePayload payload) {
         outline = payload;
-        ticksLeft = Math.max(40, payload.ticks());
+        // Full "show area" requests use the configured time; short previews (depth picker) keep theirs.
+        int ticks = payload.ticks() >= 200 ? WorkerConfig.outlineSeconds() * 20 : payload.ticks();
+        ticksLeft = Math.max(40, ticks);
+    }
+
+    private static boolean heldOpen(Minecraft mc) {
+        return mc.player != null && mc.player.isShiftKeyDown()
+            && (mc.player.getMainHandItem().is(HelpfulWorkers.CLIPBOARD.get())
+                || mc.player.getOffhandItem().is(HelpfulWorkers.CLIPBOARD.get()));
     }
 
     @SubscribeEvent
     static void tick(ClientTickEvent.Post event) {
-        if (outline == null || ticksLeft <= 0) {
-            outline = null;
-            return;
-        }
-        ticksLeft--;
+        if (outline == null) return;
         Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null || mc.player == null || !outline.hasArea()) return;
-        if (ticksLeft % 4 != 0) return;
-        drawBox(mc, outline.minX(), outline.minY(), outline.minZ(), outline.maxX(), outline.maxY(), outline.maxZ());
-        marker(mc, outline.bed(), 0.2f, 0.6f, 1f);
-        marker(mc, outline.supply(), 1f, 0.85f, 0.2f);
-        marker(mc, outline.output(), 0.3f, 1f, 0.3f);
-        marker(mc, outline.table(), 0.9f, 0.5f, 0.2f);
+        if (heldOpen(mc)) return; // sneaking with the clipboard keeps the outline up
+        if (--ticksLeft <= 0) outline = null;
     }
 
-    private static void drawBox(Minecraft mc, int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
-        DustParticleOptions dust = new DustParticleOptions(new Vector3f(0.2f, 0.85f, 1f), 1f);
-        // Vertical edges
-        for (int[] corner : new int[][]{{minX, minZ}, {minX, maxZ + 1}, {maxX + 1, minZ}, {maxX + 1, maxZ + 1}}) {
-            for (int y = minY; y <= maxY + 1; y += Math.max(1, (maxY - minY + 2) / 8)) {
-                mc.level.addParticle(dust, corner[0], y, corner[1], 0, 0, 0);
-            }
+    @SubscribeEvent
+    static void render(RenderLevelStageEvent event) {
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return;
+        WorkerNetwork.AreaOutlinePayload o = outline;
+        Minecraft mc = Minecraft.getInstance();
+        if (o == null || mc.level == null) return;
+        PoseStack pose = event.getPoseStack();
+        Vec3 cam = event.getCamera().getPosition();
+        MultiBufferSource.BufferSource buffers = mc.renderBuffers().bufferSource();
+        VertexConsumer lines = buffers.getBuffer(RenderType.lines());
+        pose.pushPose();
+        pose.translate(-cam.x, -cam.y, -cam.z);
+        if (o.hasArea()) {
+            AABB area = new AABB(o.minX(), o.minY(), o.minZ(), o.maxX() + 1, o.maxY() + 1, o.maxZ() + 1);
+            LevelRenderer.renderLineBox(pose, lines, area, 0.25f, 0.85f, 1.0f, 1.0f);
+            LevelRenderer.renderLineBox(pose, lines, area.inflate(0.03), 0.1f, 0.45f, 0.6f, 0.6f);
         }
-        // Top and bottom rings
-        for (int x = minX; x <= maxX + 1; x++) {
-            mc.level.addParticle(dust, x, minY, minZ, 0, 0, 0);
-            mc.level.addParticle(dust, x, minY, maxZ + 1, 0, 0, 0);
-            mc.level.addParticle(dust, x, maxY + 1, minZ, 0, 0, 0);
-            mc.level.addParticle(dust, x, maxY + 1, maxZ + 1, 0, 0, 0);
-        }
-        for (int z = minZ; z <= maxZ + 1; z++) {
-            mc.level.addParticle(dust, minX, minY, z, 0, 0, 0);
-            mc.level.addParticle(dust, maxX + 1, minY, z, 0, 0, 0);
-            mc.level.addParticle(dust, minX, maxY + 1, z, 0, 0, 0);
-            mc.level.addParticle(dust, maxX + 1, maxY + 1, z, 0, 0, 0);
-        }
-        // Floor grid
-        for (int x = minX; x <= maxX; x += Math.max(1, (maxX - minX + 1) / 6)) {
-            for (int z = minZ; z <= maxZ; z += Math.max(1, (maxZ - minZ + 1) / 6)) {
-                mc.level.addParticle(ParticleTypes.END_ROD, x + 0.5, minY + 0.1, z + 0.5, 0, 0.01, 0);
-            }
-        }
+        marker(pose, lines, o.bed(), 0.35f, 0.55f, 1.0f);
+        marker(pose, lines, o.supply(), 1.0f, 0.85f, 0.2f);
+        marker(pose, lines, o.output(), 0.35f, 1.0f, 0.35f);
+        marker(pose, lines, o.table(), 1.0f, 0.55f, 0.2f);
+        pose.popPose();
+        buffers.endBatch(RenderType.lines());
     }
 
-    private static void marker(Minecraft mc, long packed, float r, float g, float b) {
+    /** A box hugging the block plus a short post above it, so the marker reads from a distance. */
+    private static void marker(PoseStack pose, VertexConsumer lines, long packed, float r, float g, float b) {
         if (packed == Long.MIN_VALUE) return;
         BlockPos pos = BlockPos.of(packed);
-        DustParticleOptions dust = new DustParticleOptions(new Vector3f(r, g, b), 1.2f);
-        mc.level.addParticle(dust, pos.getX() + 0.5, pos.getY() + 1.2, pos.getZ() + 0.5, 0, 0.02, 0);
+        LevelRenderer.renderLineBox(pose, lines, new AABB(pos).inflate(0.02), r, g, b, 1.0f);
+        double cx = pos.getX() + 0.5, cz = pos.getZ() + 0.5;
+        LevelRenderer.renderLineBox(pose, lines, new AABB(cx - 0.08, pos.getY() + 1.1, cz - 0.08, cx + 0.08, pos.getY() + 1.7, cz + 0.08),
+            r, g, b, 1.0f);
     }
 }

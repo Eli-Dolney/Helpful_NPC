@@ -80,7 +80,7 @@ final class Blueprints {
         }
         for(int i=worker.blueprintLibrary.size()-1;i>=0;i--) if(worker.blueprintLibrary.getCompound(i).getString("Name").equals(name)) worker.blueprintLibrary.remove(i);
         CompoundTag saved=new CompoundTag(); saved.putString("Name",name);saved.put("Blocks",blocks.copy()); worker.blueprintLibrary.add(saved);
-        worker.blueprint=name; worker.blueprintBlocks=blocks; worker.buildOrigin=null; worker.scanCursor=0;
+        worker.blueprint=name; worker.blueprintBlocks=blocks; worker.buildOrigin=null; worker.scanCursor=0; SitePrep.reset(worker);
         return "Saved blueprint " + name + " with " + blocks.size() + " blocks";
     }
 
@@ -100,7 +100,7 @@ final class Blueprints {
             CompoundTag saved=worker.blueprintLibrary.getCompound(i);
             if(saved.getString("Name").equals(name)) {
                 worker.blueprint=name;worker.blueprintBlocks=saved.getList("Blocks",10).copy();
-                worker.buildOrigin=null;worker.scanCursor=0;return "Loaded blueprint "+name;
+                worker.buildOrigin=null;worker.scanCursor=0;SitePrep.reset(worker);return "Loaded blueprint "+name;
             }
         }
         return "Unknown blueprint " + name;
@@ -122,7 +122,7 @@ final class Blueprints {
 
     static String place(Worker worker,BlockPos pos,int rotation) {
         if(worker.blueprintBlocks.isEmpty()) return "Capture a blueprint first";
-        worker.buildOrigin=pos; worker.buildRotation=Math.floorMod(rotation,4); worker.scanCursor=0;
+        worker.buildOrigin=pos; worker.buildRotation=Math.floorMod(rotation,4); worker.scanCursor=0; SitePrep.reset(worker);
         return "Blueprint origin set to " + pos.toShortString() + " (" + worker.buildRotation*90 + " degrees)";
     }
 
@@ -189,16 +189,34 @@ final class Blueprints {
         int x0 = minX + (plotW - needW) / 2;
         int z0 = minZ + (plotD - needD) / 2;
         // Rotation 1 maps local (x, z) to (-z, x), so shift the origin to keep the house inside the plot.
-        worker.buildOrigin = fitsStraight ? new BlockPos(x0, minY, z0) : new BlockPos(x0 + needW - 1, minY, z0);
+        BlockPos origin = fitsStraight ? new BlockPos(x0, minY, z0) : new BlockPos(x0 + needW - 1, minY, z0);
+        // Re-pressing "Build on it" mid-build keeps the placement and never re-clears the half-built house.
+        if (!origin.equals(worker.buildOrigin)) SitePrep.reset(worker);
+        worker.buildOrigin = origin;
         worker.scanCursor = 0;
         return null;
     }
 
     static void tick(ServerLevel level, Worker worker) {
-        if (worker.buildOrigin == null || worker.blueprintBlocks.isEmpty()) {
-            worker.status = "Set blueprint placement";
+        if (worker.prepOnly) {
+            if (worker.first == null || worker.second == null) {
+                worker.prepOnly = false;
+                worker.setStatusKey(Lang.STATUS_MARK_PLOT);
+                worker.working = false;
+                return;
+            }
+            if (!SitePrep.tick(level, worker)) return;
+            worker.prepOnly = false;
+            worker.sitePrepDone = false;
+            worker.setStatusKey(Lang.STATUS_PLOT_FLATTENED);
+            worker.working = false;
             return;
         }
+        if (worker.buildOrigin == null || worker.blueprintBlocks.isEmpty()) {
+            worker.setStatusKey(Lang.STATUS_SET_BLUEPRINT_PLACEMENT);
+            return;
+        }
+        if (!SitePrep.tick(level, worker)) return;
         boolean freePreset = isFreePreset(worker.blueprint);
         int placedThisTick = 0;
         int maxPerTick = freePreset ? 6 : 1;
@@ -208,7 +226,7 @@ final class Blueprints {
             int rx = switch (worker.buildRotation) { case 1 -> -z; case 2 -> -x; case 3 -> z; default -> x; };
             int rz = switch (worker.buildRotation) { case 1 -> x; case 2 -> -z; case 3 -> -x; default -> z; };
             BlockPos pos = worker.buildOrigin.offset(rx, y, rz);
-            if (!level.isLoaded(pos)) { worker.status = "Build chunk unloaded"; return; }
+            if (!level.isLoaded(pos)) { worker.setStatusKey(Lang.STATUS_BUILD_CHUNK_UNLOADED); return; }
             Rotation rotation = switch (worker.buildRotation) {
                 case 1 -> Rotation.CLOCKWISE_90;
                 case 2 -> Rotation.CLOCKWISE_180;
@@ -226,17 +244,13 @@ final class Blueprints {
                     continue;
                 }
             } else if (!current.isAir()) {
-                worker.status = "Conflicting block at " + pos.toShortString();
+                worker.setStatusKey(Lang.STATUS_CONFLICTING_BLOCK, pos.toShortString());
                 worker.working = false;
                 return;
             }
             if (placedThisTick == 0 && !worker.approachWithin(pos, 4, 7)) return;
-            if (!state.getCollisionShape(level, pos).isEmpty()
-                && worker.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(pos))) {
-                BlockPos standOn = pos.above();
-                while (!Worker.canStandAt(level, standOn) && standOn.getY() < pos.getY() + 8) standOn = standOn.above();
-                worker.teleportTo(worker.getX(), standOn.getY(), worker.getZ());
-            }
+            // Standing where the block goes: step to a free neighbour first (teleport only if there is none).
+            if (!state.getCollisionShape(level, pos).isEmpty() && !worker.nav.stepAside(pos)) return;
             if (!freePreset) {
                 ItemStack needed = new ItemStack(state.getBlock().asItem());
                 if (needed.isEmpty() || needed.getItem() == net.minecraft.world.item.Items.AIR) {
@@ -244,13 +258,20 @@ final class Blueprints {
                     continue;
                 }
                 if (!Jobs.take(level, worker, needed)) {
-                    worker.status = "Missing " + needed.getHoverName().getString();
+                    Jobs.missing(worker, StatusText.name(needed));
                     return;
                 }
             }
             // Skip neighbor updates so torches, doors and panes aren't knocked off before their walls exist.
             level.setBlock(pos, state, net.minecraft.world.level.block.Block.UPDATE_CLIENTS
                 | net.minecraft.world.level.block.Block.UPDATE_KNOWN_SHAPE);
+            if (placedThisTick == 0) {
+                worker.swing(net.minecraft.world.InteractionHand.MAIN_HAND, true);
+                worker.getLookControl().setLookAt(net.minecraft.world.phys.Vec3.atCenterOf(pos));
+                var sound = state.getSoundType();
+                level.playSound(null, pos, sound.getPlaceSound(), net.minecraft.sounds.SoundSource.BLOCKS,
+                    (sound.getVolume() + 1.0f) / 2.0f, sound.getPitch() * 0.8f);
+            }
             if (entry.contains("BlockEntity")) {
                 BlockEntity be = level.getBlockEntity(pos);
                 if (be != null) {
@@ -264,10 +285,10 @@ final class Blueprints {
             }
             worker.scanCursor = i + 1;
             placedThisTick++;
-            worker.status = "Building " + worker.blueprint + ": " + worker.scanCursor + "/" + worker.blueprintBlocks.size();
+            worker.setStatusKey(Lang.STATUS_BUILDING_PROGRESS, worker.blueprint, worker.scanCursor, worker.blueprintBlocks.size());
             if (placedThisTick >= maxPerTick) return;
         }
-        worker.status = "Blueprint complete";
+        worker.setStatusKey(Lang.STATUS_BLUEPRINT_COMPLETE);
         worker.working = false;
     }
 }

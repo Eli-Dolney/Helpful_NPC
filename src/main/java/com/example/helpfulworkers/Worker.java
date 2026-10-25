@@ -10,6 +10,9 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -26,10 +29,14 @@ import net.minecraft.world.entity.ai.goal.FloatGoal;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.MeleeAttackGoal;
+import net.minecraft.world.entity.ai.goal.OpenDoorGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.goal.RangedBowAttackGoal;
+import net.minecraft.world.entity.ai.goal.WaterAvoidingRandomStrollGoal;
 import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
 import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
+import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
+import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.RangedAttackMob;
@@ -42,19 +49,33 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ProjectileWeaponItem;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.pathfinder.PathType;
 
 public final class Worker extends PathfinderMob implements RangedAttackMob {
+    /** Short status line, state colour and role, synced to clients for the overhead text and outfit. */
+    static final EntityDataAccessor<String> DATA_STATUS = SynchedEntityData.defineId(Worker.class, EntityDataSerializers.STRING);
+    static final EntityDataAccessor<Byte> DATA_STATE = SynchedEntityData.defineId(Worker.class, EntityDataSerializers.BYTE);
+    static final EntityDataAccessor<String> DATA_ROLE = SynchedEntityData.defineId(Worker.class, EntityDataSerializers.STRING);
+    static final EntityDataAccessor<Byte> DATA_LEVEL = SynchedEntityData.defineId(Worker.class, EntityDataSerializers.BYTE);
+    static final EntityDataAccessor<Integer> DATA_XP = SynchedEntityData.defineId(Worker.class, EntityDataSerializers.INT);
+    static final EntityDataAccessor<String> DATA_TRAIT = SynchedEntityData.defineId(Worker.class, EntityDataSerializers.STRING);
+    /** "item_id=count,..." of the bag reserves, for the equipment screen tooltip. */
+    static final EntityDataAccessor<String> DATA_RESERVES = SynchedEntityData.defineId(Worker.class, EntityDataSerializers.STRING);
+
+    /** Experience needed for levels 1..5. */
+    static final int[] LEVEL_XP = {0, 100, 300, 700, 1500};
+    static final List<String> TRAITS = List.of("cheerful", "grumpy", "chatty", "quiet", "curious");
+    private static final net.minecraft.resources.ResourceLocation LEVEL_HEALTH_ID =
+        net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(HelpfulWorkers.ID, "level_health");
+    /** Ticks between two chats of the same worker with a workmate. */
+    static final long CHATTER_COOLDOWN = 2400;
+    static final byte STATE_IDLE = 0, STATE_WORKING = 1, STATE_BLOCKED = 2, STATE_SLEEPING = 3;
+    static final int STATUS_LINE_MAX = 40;
+
     private static final net.minecraft.network.syncher.EntityDataAccessor<String> APPEARANCE_NAME = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.STRING);
     private static final net.minecraft.network.syncher.EntityDataAccessor<String> APPEARANCE_SKIN = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.STRING);
     private static final net.minecraft.network.syncher.EntityDataAccessor<Boolean> APPEARANCE_SLIM = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.BOOLEAN);
     private static final net.minecraft.network.syncher.EntityDataAccessor<java.util.Optional<UUID>> APPEARANCE_OWNER = net.minecraft.network.syncher.SynchedEntityData.defineId(Worker.class, net.minecraft.network.syncher.EntityDataSerializers.OPTIONAL_UUID);
-    @Override protected void defineSynchedData(net.minecraft.network.syncher.SynchedEntityData.Builder builder) {
-        super.defineSynchedData(builder);
-        builder.define(APPEARANCE_NAME, "Worker");
-        builder.define(APPEARANCE_OWNER, java.util.Optional.empty());
-        builder.define(APPEARANCE_SKIN, "auto");
-        builder.define(APPEARANCE_SLIM, false);
-    }
     UUID skinOwner() { return entityData.get(APPEARANCE_OWNER).orElse(null); }
     String personalName() { return entityData.get(APPEARANCE_NAME); }
     String skinKey() { return entityData.get(APPEARANCE_SKIN); }
@@ -76,15 +97,72 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     boolean useBoneMeal;
     boolean needsUnload;
     BlockPos first, second, bed, supply, output, craftingTable, buildOrigin;
+    /** Craft-trade workstations: toolsmith anvil/grindstone, stonemason stonecutter. */
+    BlockPos anvil, grindstone, stonecutter;
+    /** Toolsmith stock targets per tool key (see ToolsmithJobs.TOOL_KEYS); missing = 1. Saved. */
+    final java.util.Map<String, Integer> toolTargets = new java.util.LinkedHashMap<>();
+    /** Toolsmith: the workmate a tool is promised to; not saved. */
+    UUID toolDeliveryTo;
+    String toolDeliveryKey;
+    long lastDemandScan;
+    /** Town hall this worker gathers at when it has no bed (recall, go home). */
+    BlockPos hall;
+    /** Personality: one of {@link #TRAITS}; empty until picked. Sets greeting lines and voice pitch. */
+    String trait = "";
+    /** Experience from work; {@link #workerLevel()} is derived from it. */
+    int xp;
+    long lastChatter;
+    /** Item id → how many to keep in the bag when depositing (owner-set or remembered from supply trips). */
+    final java.util.Map<String, Integer> reserves = new java.util.HashMap<>();
     /** Extra assignment lists for smelter furnaces / courier pickups (NBT-saved). */
     final java.util.List<BlockPos> furnaces = new ArrayList<>();
     final java.util.List<BlockPos> pickups = new ArrayList<>();
+    /** Courier: per pickup chest (packed pos) the item ids it may take (empty = anything) and how many to leave behind. */
+    final java.util.Map<Long, List<String>> pickupFilters = new java.util.HashMap<>();
+    final java.util.Map<Long, Integer> pickupKeep = new java.util.HashMap<>();
+    /** Courier: which pickup chest the next round starts at (round-robin). */
+    int courierCursor;
+    /** Smelter/courier: item ids fetched for the furnaces; deposit leaves these in the bag. */
+    final List<String> furnaceHaul = new ArrayList<>();
+    /** The request board: "collect {count} of {item}", with how many have been collected so far. Saved. */
+    record Request(String item, int count, int done) {
+        boolean finished() { return done >= count; }
+    }
+    final List<Request> requests = new ArrayList<>();
+    /** Stonemason cutting orders: item id, wanted, cut so far, and whether a builder's blueprint asked for it. Saved. */
+    record Order(String item, int count, int done, boolean auto) {
+        boolean finished() { return done >= count; }
+    }
+    final List<Order> orders = new ArrayList<>();
+    /** Stonemason: derive orders from nearby builders' blueprints. */
+    boolean supplyBuilders;
+    long lastOrderScan;
+    /** Cook: bring food to hungry workmates; bake bread when wheat is about. Saved. */
+    boolean feedWorkers = true;
+    boolean craftMeals;
+    UUID feedTo;
+    long lastFeedScan;
+    /** Courier mode: "zone" (assigned pickup chests) or "porter" (every owned worker's output chest nearby). Saved. */
+    String courierMode = "zone";
+    final List<BlockPos> porterPickups = new ArrayList<>();
+    long lastPorterScan;
+    /** Pause once every request is met; off, the worker keeps collecting past the count. */
+    boolean requestsStop = true;
+    static final int MAX_REQUESTS = 4;
+    /** The job's own words, before the request progress is appended. */
+    String statusBase = status;
+    /** What clients get: {@link StatusText} code for the full status line (base + request progress). */
+    String statusCode = status;
+    /** The job's own part of {@link #statusCode}, kept so request progress can be re-appended. */
+    String statusBaseCode = status;
     /** Enabled ranch species: sheep, cow, pig, chicken. */
     final List<String> ranchAnimals = new ArrayList<>(List.of("sheep", "cow", "pig", "chicken"));
     boolean ranchShear = true;
     boolean ranchMilk = true;
     boolean ranchEggs = true;
     boolean ranchBreed = true;
+    /** Bottle or shear full hives that have a campfire smoking them from below. */
+    boolean ranchHoney = true;
     /** One-shot cull-to-2 in progress. */
     boolean culling;
     ItemStack borrowedSword = ItemStack.EMPTY;
@@ -97,23 +175,51 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     long nextWorkTick;
     int idleLevel;
     long recoverUntil;
+    /** Set by a knock-out while working; the worker picks its job back up once recovered. */
+    boolean resumeAfterRecovery;
+    int regenCounter;
     long idleUntil;
+    /** Game time of the last drop-off at the output chest (0 = never); shown on the roster. */
+    long lastDepositTime;
     boolean statusDirty;
     boolean equipDirty = true;
     String blueprint = "";
     ListTag blueprintBlocks = new ListTag();
     ListTag blueprintLibrary = new ListTag();
     int buildRotation;
+    /** Ground preparation before building: {@link SitePrep#NONE}, {@link SitePrep#CLEAR} or {@link SitePrep#FLATTEN}. */
+    String sitePrep = SitePrep.CLEAR;
+    boolean sitePrepDone;
+    int prepCursor;
+    /** Flatten the marked plot without building anything on it. */
+    boolean prepOnly;
+    java.util.Map<BlockPos, net.minecraft.world.level.block.state.BlockState> prepPlanned;
+    BlockPos prepPlannedOrigin;
+    int prepPlannedRotation;
+    int prepPlannedSize;
     final SimpleContainer bag = new SimpleContainer(27);
     final List<String> recipes = new ArrayList<>();
     final List<String> enabledCrops = new ArrayList<>(List.of("wheat", "carrots", "potatoes", "beetroots"));
-    int scanCursor, stuckTicks;
+    int scanCursor;
+    /** Large-area scan: highest terrain seen in the top layer of this pass (MAX = not known yet), and its running max. */
+    transient int scanPeak = Integer.MAX_VALUE, scanPeakAcc = Integer.MIN_VALUE;
+    /** Forester columns searched since the forest was last found empty (large areas keep looking instead of resting). */
+    transient int treeColumnsScanned;
     BlockPos target;
-    BlockPos navigationTarget;
-    double lastDistance = Double.MAX_VALUE;
-    int noProgressTicks;
-    net.minecraft.world.phys.Vec3 lastCheckPos;
-    int failedRoutes;
+    /** Routes, stuck recovery and errands (fetch from supply, craft at table); not saved. */
+    final WorkerNav nav = new WorkerNav(this);
+    /** Swing, cracks and hit sounds while a block is being worked; not saved. */
+    final WorkAnimator animator = new WorkAnimator(this);
+    /** Logs of the tree being felled, bottom first; saved so a reload finishes the tree. */
+    final List<BlockPos> fellQueue = new ArrayList<>();
+    BlockPos fellBase;
+    String fellSapling = "";
+    long lastGreet;
+    boolean greetedSleep;
+    /** Teleport fallbacks this worker has taken since it was loaded (tests and tuning). */
+    int hops;
+    /** Remote "does the supply chest hold X" answers, cached for 10 s so nobody walks for nothing. */
+    final java.util.Map<String, Jobs.Peek> supplyPeek = new java.util.HashMap<>();
     /** Block positions this worker recently failed to reach, mapped to the game time they can be retried. */
     final java.util.Map<Long, Long> unreachable = new java.util.HashMap<>();
     /** Cached mine plan steps for staircase/strip/colony modes. */
@@ -129,17 +235,247 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         super(type, level);
         for (EquipmentSlot slot : EquipmentSlot.values()) setDropChance(slot, 0.0f);
         bag.addListener(c -> equipDirty = true);
-        setPathfindingMalus(net.minecraft.world.level.pathfinder.PathType.WATER, 8.0f);
-        setPathfindingMalus(net.minecraft.world.level.pathfinder.PathType.WATER_BORDER, 4.0f);
-        setPathfindingMalus(net.minecraft.world.level.pathfinder.PathType.LAVA, -1.0f);
+        setPathfindingMalus(PathType.WATER, 8.0f);
+        setPathfindingMalus(PathType.WATER_BORDER, 4.0f);
+        setPathfindingMalus(PathType.LAVA, -1.0f);
+        // Doors are free, fences are walls, canopies are a detour, fire is a last resort.
+        setPathfindingMalus(PathType.DOOR_WOOD_CLOSED, 0.0f);
+        setPathfindingMalus(PathType.FENCE, -1.0f);
+        setPathfindingMalus(PathType.LEAVES, 4.0f);
+        setPathfindingMalus(PathType.DANGER_FIRE, 16.0f);
     }
 
+    @Override protected void defineSynchedData(SynchedEntityData.Builder builder) {
+        super.defineSynchedData(builder);
+        builder.define(DATA_STATUS, "");
+        builder.define(DATA_STATE, STATE_IDLE);
+        builder.define(DATA_ROLE, "idle");
+        builder.define(DATA_LEVEL, (byte) 1);
+        builder.define(DATA_XP, 0);
+        builder.define(DATA_TRAIT, "");
+        builder.define(DATA_RESERVES, "");
+        builder.define(APPEARANCE_NAME, "Worker");
+        builder.define(APPEARANCE_OWNER, java.util.Optional.empty());
+        builder.define(APPEARANCE_SKIN, "auto");
+        builder.define(APPEARANCE_SLIM, false);
+    }
+
+    /** Push the overhead line, state colour and role to tracking clients (sends only on change). */
+    void pushClientData() {
+        // The code is translated (and cut to the line length) on the client.
+        String line = statusCode == null ? "" : statusCode;
+        if (!line.equals(entityData.get(DATA_STATUS))) entityData.set(DATA_STATUS, line);
+        byte state = clientState();
+        if (state != entityData.get(DATA_STATE)) {
+            // A short "hmm" the moment the worker gets stuck on something.
+            if (state == STATE_BLOCKED && level() instanceof ServerLevel) playSound(WorkerSounds.HMM.get(), 0.4f, voicePitch());
+            entityData.set(DATA_STATE, state);
+        }
+        byte lvl = (byte) workerLevel();
+        if (lvl != entityData.get(DATA_LEVEL)) entityData.set(DATA_LEVEL, lvl);
+        if (xp != entityData.get(DATA_XP)) entityData.set(DATA_XP, xp);
+        String t = trait == null ? "" : trait;
+        if (!t.equals(entityData.get(DATA_TRAIT))) entityData.set(DATA_TRAIT, t);
+        String kept = reservesLine();
+        if (!kept.equals(entityData.get(DATA_RESERVES))) entityData.set(DATA_RESERVES, kept);
+        String r = role == null || role.isBlank() ? "idle" : role;
+        if (!r.equals(entityData.get(DATA_ROLE))) entityData.set(DATA_ROLE, r);
+    }
+
+    byte clientState() {
+        if (isSleeping()) return STATE_SLEEPING;
+        String s = status == null ? "" : status;
+        if (s.startsWith("Missing") || s.startsWith("Need ") || s.startsWith("No ") || s.startsWith("Can't")
+            || s.startsWith("Out of") || s.startsWith("Paused:") || s.startsWith("Skipping")
+            || s.startsWith("Conflicting") || s.startsWith("Recovering") || s.contains("unloaded")
+            || s.startsWith(Jobs.OUT_OF_SPACE.substring(0, 12))) return STATE_BLOCKED;
+        return working ? STATE_WORKING : STATE_IDLE;
+    }
+
+    @Override protected PathNavigation createNavigation(Level level) {
+        GroundPathNavigation navigation = new GroundPathNavigation(this, level);
+        navigation.setCanOpenDoors(true);
+        navigation.setCanPassDoors(true);
+        navigation.setCanFloat(true);
+        return navigation;
+    }
+
+    /** Set what the worker is doing; an open request's progress ("· Request 10/64 Oak Log") rides along. */
     void setStatus(String s) {
-        if (s == null) s = "";
-        if (!s.equals(status)) {
-            status = s;
+        applyStatus(StatusText.literal(s));
+    }
+
+    /** Set a translatable status: {@code key} from en_us.json, with {@link StatusText.Name} args for block/item names. */
+    void setStatusKey(String key, Object... args) {
+        applyStatus(StatusText.encode(key, args));
+    }
+
+    /** Re-apply the current job status (after the request list changed). */
+    void refreshStatus() {
+        applyStatus(statusBaseCode);
+    }
+
+    private void applyStatus(String baseCode) {
+        if (baseCode == null) baseCode = "";
+        statusBaseCode = baseCode;
+        statusBase = StatusText.english(baseCode);
+        String code = StatusText.join(baseCode, requestSuffix());
+        String english = StatusText.english(code);
+        if (!english.equals(status) || !code.equals(statusCode)) {
+            status = english;
+            statusCode = code;
             statusDirty = true;
         }
+    }
+
+    // ---------------------------------------------------------------- levels, traits, reserves
+
+    static int levelFor(int xp) {
+        int level = 1;
+        for (int i = 1; i < LEVEL_XP.length; i++) if (xp >= LEVEL_XP[i]) level = i + 1;
+        return level;
+    }
+
+    int workerLevel() {
+        return levelFor(xp);
+    }
+
+    /** XP needed for the next level, or -1 at the top level. */
+    static int nextLevelXp(int xp) {
+        int level = levelFor(xp);
+        return level >= LEVEL_XP.length ? -1 : LEVEL_XP[level];
+    }
+
+    void gainXp(int amount) {
+        if (amount <= 0) return;
+        int before = workerLevel();
+        xp = Math.min(Integer.MAX_VALUE - amount, xp) + amount;
+        int after = workerLevel();
+        if (after > before) onLevelUp(after);
+    }
+
+    private void onLevelUp(int level) {
+        applyLevelHealth();
+        heal(2.0f * (level - 1));
+        playSound(WorkerSounds.LEVEL_UP.get(), 0.8f, 1.0f);
+        if (level() instanceof ServerLevel sl) {
+            sl.sendParticles(net.minecraft.core.particles.ParticleTypes.HAPPY_VILLAGER, getX(), getY() + 1.2, getZ(),
+                20, 0.4, 0.6, 0.4, 0.05);
+            if (findOwner() instanceof ServerPlayer owner) {
+                WorkerNetwork.toast(owner, Component.translatable(Lang.LEVEL_UP, getName(), level));
+            }
+        }
+    }
+
+    /** +2 max health per level above 1, as a fixed-id modifier (re-applied on load and level-up). */
+    void applyLevelHealth() {
+        var health = getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.MAX_HEALTH);
+        if (health == null) return;
+        health.removeModifier(LEVEL_HEALTH_ID);
+        int level = workerLevel();
+        if (level > 1) {
+            health.addPermanentModifier(new net.minecraft.world.entity.ai.attributes.AttributeModifier(LEVEL_HEALTH_ID,
+                2.0 * (level - 1), net.minecraft.world.entity.ai.attributes.AttributeModifier.Operation.ADD_VALUE));
+        }
+    }
+
+    void pickTraitIfMissing() {
+        if (trait == null || !TRAITS.contains(trait)) trait = TRAITS.get(random.nextInt(TRAITS.size()));
+    }
+
+    float voicePitch() {
+        float base = switch (trait == null ? "" : trait) {
+            case "cheerful" -> 1.25f;
+            case "grumpy" -> 0.8f;
+            case "chatty" -> 1.15f;
+            case "quiet" -> 0.95f;
+            case "curious" -> 1.1f;
+            default -> 1.0f;
+        };
+        return base + (random.nextFloat() - 0.5f) * 0.1f;
+    }
+
+    /** How many of this item stay in the bag on drop-off: the owner's/remembered reserve, else 16 saplings. */
+    int reserveFor(ItemStack stack) {
+        Integer r = reserves.get(ExtraJobs.itemId(stack));
+        if (r != null) return r;
+        return stack.is(net.minecraft.tags.ItemTags.SAPLINGS) ? 16 : 0;
+    }
+
+    private String reservesLine() {
+        if (reserves.isEmpty()) return "";
+        StringBuilder b = new StringBuilder();
+        for (var e : new java.util.TreeMap<>(reserves).entrySet()) {
+            if (b.length() > 0) b.append(',');
+            b.append(e.getKey()).append('=').append(e.getValue());
+        }
+        return b.toString();
+    }
+
+    /** Two idle workers of the same owner standing close swap a line now and then; the owner hears it nearby. */
+    private void maybeChatter(ServerLevel level) {
+        long now = level.getGameTime();
+        if (now - lastChatter < CHATTER_COOLDOWN || random.nextInt(8) != 0 || owner == null) return;
+        for (Worker other : level.getEntitiesOfClass(Worker.class, getBoundingBox().inflate(4),
+                w -> w != this && owner.equals(w.owner) && !w.working && now - w.lastChatter >= CHATTER_COOLDOWN)) {
+            lastChatter = now;
+            other.lastChatter = now;
+            getLookControl().setLookAt(other, 30f, 30f);
+            other.getLookControl().setLookAt(this, 30f, 30f);
+            playSound(WorkerSounds.CHATTER.get(), 0.5f, voicePitch());
+            if (findOwner() instanceof ServerPlayer p && p.distanceToSqr(this) < 16 * 16) {
+                WorkerNetwork.toast(p, Component.translatable(Lang.CHATTER_FORMAT, getName(),
+                    Component.translatable(Lang.chatterKey(1 + random.nextInt(Lang.CHATTER_LINES)), other.getName())));
+            }
+            return;
+        }
+    }
+
+    /** Request progress as a status code segment ("" without requests). */
+    String requestSuffix() {
+        if (requests.isEmpty()) return "";
+        for (Request r : requests) {
+            if (!r.finished()) return StatusText.encode(Lang.STATUS_REQUEST, r.done(), r.count(), requestItemName(r.item()));
+        }
+        return StatusText.encode(Lang.STATUS_REQUESTS_DONE);
+    }
+
+    static Object requestItemName(String itemId) {
+        var key = net.minecraft.resources.ResourceLocation.tryParse(itemId);
+        var item = key == null ? null : net.minecraft.core.registries.BuiltInRegistries.ITEM.getOptional(key).orElse(null);
+        return item == null ? itemId : StatusText.name(item);
+    }
+
+    static String requestName(String itemId) {
+        var key = net.minecraft.resources.ResourceLocation.tryParse(itemId);
+        var item = key == null ? null : net.minecraft.core.registries.BuiltInRegistries.ITEM.getOptional(key).orElse(null);
+        return item == null ? itemId : new ItemStack(item).getHoverName().getString();
+    }
+
+    /** Count a collected stack against the open request for that item; pause when the board is done and asked to. */
+    void noteRequestProgress(ItemStack stack) {
+        if (requests.isEmpty() || stack.isEmpty()) return;
+        String id = ExtraJobs.itemId(stack);
+        boolean changed = false;
+        for (int i = 0; i < requests.size(); i++) {
+            Request r = requests.get(i);
+            if (r.finished() || !r.item().equals(id)) continue;
+            requests.set(i, new Request(r.item(), r.count(), Math.min(r.count(), r.done() + stack.getCount())));
+            changed = true;
+            break;
+        }
+        if (!changed) return;
+        boolean allDone = requests.stream().allMatch(Request::finished);
+        if (allDone && requestsStop && working) {
+            working = false;
+            target = null;
+            getNavigation().stop();
+            setStatusKey(Lang.STATUS_ALL_COLLECTED);
+            rebuildGoals();
+            WorkerActions.sync(this);
+            return;
+        }
+        refreshStatus();
     }
 
     void markWorkFound() {
@@ -150,6 +486,8 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     }
 
     void markIdle() {
+        // A pending supply or crafting trip is work: keep the one-second cadence until it is done.
+        if (nav.hasErrand()) { markWorkFound(); return; }
         idleLevel = Math.min(idleLevel + 1, 3);
         int[] backoff = {100, 300, 600, 1200}; // 5s, 15s, 30s, 60s
         if (level() instanceof ServerLevel sl) {
@@ -164,11 +502,39 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         for (String crop : enabledCrops) flags.add("crop:" + crop);
         if (useBoneMeal) flags.add("bonemeal");
         for (String animal : ranchAnimals) flags.add("rancher:" + animal);
+        for (int i = 0; i < requests.size(); i++) {
+            Request r = requests.get(i);
+            flags.add("req:" + i + "|" + r.item() + "|" + r.done() + "|" + r.count());
+        }
+        if (requestsStop) flags.add("reqstop");
+        for (int i = 0; i < orders.size(); i++) {
+            Order o = orders.get(i);
+            flags.add("order:" + i + "|" + o.item() + "|" + o.done() + "|" + o.count() + "|" + (o.auto() ? 1 : 0));
+        }
+        if (supplyBuilders) flags.add("supplybuilders");
+        if (feedWorkers) flags.add("feedworkers");
+        if (craftMeals) flags.add("craftmeals");
+        flags.add("courier:" + ("porter".equals(courierMode) ? "porter" : "zone"));
         if (ranchBreed) flags.add("breed");
         if (ranchShear) flags.add("shear");
         if (ranchMilk) flags.add("milk");
         if (ranchEggs) flags.add("eggs");
+        if (ranchHoney) flags.add("honey");
         if (culling) flags.add("culling");
+        flags.add("siteprep:" + (sitePrep == null ? SitePrep.CLEAR : sitePrep));
+        if (prepOnly) flags.add("flattening");
+        if (anvil != null) flags.add("anvil");
+        if (grindstone != null) flags.add("grindstone");
+        if (stonecutter != null) flags.add("stonecutter");
+        for (String key : ToolsmithJobs.TOOL_KEYS) flags.add("tool:" + key + "|" + ToolsmithJobs.target(this, key));
+        flags.add("level:" + workerLevel() + "|" + xp + "|" + nextLevelXp(xp));
+        if (trait != null && !trait.isEmpty()) flags.add("trait:" + trait);
+        for (int i = 0; i < pickups.size(); i++) {
+            BlockPos p = pickups.get(i);
+            flags.add("pickup:" + i + "|" + p.getX() + "," + p.getY() + "," + p.getZ() + "|"
+                + pickupKeep.getOrDefault(p.asLong(), 0) + "|"
+                + String.join(",", pickupFilters.getOrDefault(p.asLong(), List.of())));
+        }
         return flags;
     }
 
@@ -183,13 +549,11 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
 
     void refreshDisplayName() {
         String base = baseName == null || baseName.isBlank() ? "Worker" : baseName;
+        // The role now lives on the overhead status line drawn by WorkerRenderer.
         entityData.set(APPEARANCE_NAME, base);
-        if ("idle".equals(role) || role == null || role.isBlank()) {
-            setCustomName(Component.literal(base));
-        } else {
-            setCustomName(Component.literal(base + " (" + WorkerActions.roleLabel(role) + ")"));
-        }
+        setCustomName(Component.literal(base));
         setCustomNameVisible(true);
+        pushClientData();
     }
 
     static String stripRoleSuffix(String name) {
@@ -201,6 +565,8 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         goalSelector.removeAllGoals(g -> true);
         targetSelector.removeAllGoals(g -> true);
         goalSelector.addGoal(0, new FloatGoal(this));
+        // Every role opens wooden doors on its path and closes them behind itself.
+        goalSelector.addGoal(1, new OpenDoorGoal(this, true));
         if (WorkerActions.isCombatRole(role)) {
             if ("archer".equals(role)) {
                 goalSelector.addGoal(2, new RangedBowAttackGoal<>(this, 1.0, 20, 15.0f));
@@ -220,6 +586,21 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         if (!working || WorkerActions.isCombatRole(role)) {
             goalSelector.addGoal(8, new LookAtPlayerGoal(this, Player.class, 6));
             goalSelector.addGoal(9, new RandomLookAroundGoal(this));
+        }
+        if (!working && !WorkerActions.isCombatRole(role)) {
+            // Off duty: potter about near the bed and look at workmates instead of standing frozen.
+            if (bed != null) restrictTo(bed, 8);
+            else if (hall != null) restrictTo(hall, 10);
+            else clearRestriction();
+            // Off-duty pottering never interrupts a walk with a purpose (errand, recall, fetch).
+            goalSelector.addGoal(7, new WaterAvoidingRandomStrollGoal(this, 0.6) {
+                @Override public boolean canUse() {
+                    return !nav.walkedRecently() && super.canUse();
+                }
+            });
+            goalSelector.addGoal(8, new LookAtPlayerGoal(this, Worker.class, 3));
+        } else {
+            clearRestriction();
         }
     }
 
@@ -260,37 +641,58 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     @Override public void tick() {
         super.tick();
         if (!(level() instanceof ServerLevel level)) return;
+        animator.tick(level);
         // Stagger: only every 20 ticks, offset by entity id so workers don't sync.
         if ((tickCount + getId()) % 20 != 0) return;
         long t0 = System.nanoTime();
         try {
             tickWork(level);
         } finally {
-            WorkerPerf.record(System.nanoTime() - t0);
+            WorkerPerf.record(role, System.nanoTime() - t0);
         }
     }
 
-    private void tickWork(ServerLevel level) {
-        if (isSleeping() && !level.isNight()) stopSleeping();
+    void tickWork(ServerLevel level) {
+        if (isSleeping() && !level.isNight()) {
+            stopSleeping();
+            swing(InteractionHand.MAIN_HAND, true);
+            setStatusKey(Lang.STATUS_GOOD_MORNING);
+            greetedSleep = false;
+        }
         if (WorkerSessions.isSuspended(this)) {
             SiteJobs.suspend(this);
             getNavigation().stop();
+            animator.clear(level);
+            pushClientData();
             return;
         }
+        greetNearbyOwner(level);
         if (recoverUntil > level.getGameTime()) {
             SiteJobs.suspend(this);
             getNavigation().stop();
-            setStatus("Recovering (" + ((recoverUntil - level.getGameTime()) / 20) + "s)");
+            setStatusKey(Lang.STATUS_RECOVERING_TIMER, (recoverUntil - level.getGameTime()) / 20);
             flushStatus();
             return;
+        }
+        if (recoverUntil != 0) {
+            recoverUntil = 0;
+            if (resumeAfterRecovery) {
+                resumeAfterRecovery = false;
+                working = true;
+                target = null;
+                setStatusKey(Lang.STATUS_BACK_TO_WORK);
+                rebuildGoals();
+            }
         }
         tryEatAndHeal(level);
         WorkerEquip.tick(level, this);
         if (WorkerActions.isCombatRole(role)) {
-            if(siteId != null) {
-                var site=SiteData.get(level).sites.get(siteId);
-                if(site==null || !getUUID().equals(site.worker) || !owner.equals(site.owner)) { SiteActions.release(level,this); return; }
-                if(site.paused || !working || !level.hasChunkAt(site.core()) || !level.getBlockState(site.core()).is(SiteBlocks.CORE.get())) {
+            // Gear fetched from the supply chest: walk it before falling back in with the owner.
+            if (nav.hasErrand()) { nav.tickErrand(); flushStatus(); return; }
+            if (siteId != null) {
+                var site = SiteData.get(level).sites.get(siteId);
+                if (site == null || !getUUID().equals(site.worker) || !owner.equals(site.owner)) { SiteActions.release(level, this); return; }
+                if (site.paused || !working || !level.hasChunkAt(site.core()) || !level.getBlockState(site.core()).is(SiteBlocks.CORE.get())) {
                     getNavigation().stop(); setTarget(null); setStatus("Guard site paused or unavailable"); flushStatus(); return;
                 }
             } else if (!working) working = true;
@@ -299,33 +701,49 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             return;
         }
         if (!working) {
+            animator.clear(level);
+            // No bed or hall to potter around: stay near the spot where work stopped instead of drifting off.
+            if (bed == null && hall == null && !hasRestriction() && !WorkerActions.isCombatRole(role)) restrictTo(blockPosition(), 6);
+            maybeChatter(level);
             SiteJobs.suspend(this);
             if (needsUnload && output == null && bed != null && level.isLoaded(bed)) {
-                if (!approachWithin(bed, 2, 2)) setStatus(Jobs.OUT_OF_SPACE + " Returning to bed.");
-                else { getNavigation().stop(); setStatus(Jobs.OUT_OF_SPACE); }
+                if (!approachWithin(bed, 2, 2)) setStatusKey(Lang.STATUS_FULL_RETURNING);
+                else { getNavigation().stop(); setStatusKey(Lang.STATUS_FULL); }
+            } else if (nav.hasErrand()) {
+                nav.tickErrand();
             }
             flushStatus();
             return;
         }
         if (level.getGameTime() < nextWorkTick) {
+            // Errands keep walking through idle back-off so a fetch never crawls.
+            if (nav.hasErrand()) nav.tickErrand();
             flushStatus();
             return;
         }
         if (level.isNight() && bed != null) {
+            animator.clear(level);
+            if (!level.isLoaded(bed)) { setStatusKey(Lang.STATUS_BED_CHUNK_UNLOADED); flushStatus(); return; }
+            // Knock off for the day: drop the haul at the output chest before heading home.
+            if (output != null && level.isLoaded(output) && Jobs.hasDepositableLoot(this) && !greetedSleep) {
+                if (!Jobs.depositPublic(level, this)) { flushStatus(); return; }
+                greetedSleep = true;
+            }
             SiteJobs.suspend(this);
             if (!level.isLoaded(bed)) { setStatus("Bed chunk unloaded"); flushStatus(); return; }
             if (!approachWithin(bed, 2, 2)) {
-                if (status.startsWith("Traveling")) setStatus("Going home");
+                if (status.startsWith("Traveling")) setStatusKey(Lang.STATUS_GOING_HOME);
             } else {
                 getNavigation().stop();
                 if (!isSleeping()) startSleeping(bed);
-                setStatus("Resting at bed");
+                setStatusKey(Lang.STATUS_RESTING_AT_BED);
             }
             flushStatus();
             return;
         }
         if (siteId == null && idleUntil > level.getGameTime() && "forester".equals(role)) {
-            setStatus("Waiting for trees to grow (" + ((idleUntil - level.getGameTime()) / 20) + "s)");
+            if (nav.hasErrand()) nav.tickErrand();
+            else setStatusKey(Lang.STATUS_WAITING_TREES, (idleUntil - level.getGameTime()) / 20);
             flushStatus();
             return;
         }
@@ -333,39 +751,62 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         flushStatus();
     }
 
-    private void flushStatus() {
+    void flushStatus() {
         if (statusDirty) {
             statusDirty = false;
             WorkerActions.sync(this);
         }
+        pushClientData();
+    }
+
+    /** Say hello (once a minute) to the owner when they come up close and look at the worker. */
+    private void greetNearbyOwner(ServerLevel level) {
+        if (level.getGameTime() - lastGreet < 1200) return;
+        Player owner = findOwner();
+        if (owner == null || !(owner instanceof ServerPlayer player)) return;
+        if (distanceToSqr(owner) > 4 * 4 || !owner.hasLineOfSight(this)) return;
+        var toMe = position().subtract(owner.position()).normalize();
+        if (owner.getViewVector(1.0f).dot(toMe) < 0.8) return;
+        lastGreet = level.getGameTime();
+        getLookControl().setLookAt(owner, 30f, 30f);
+        WorkerNetwork.toast(player, Component.translatable(Lang.GREETING_FORMAT, getName(), WorkerLines.greeting(this, random)));
+        playSound(WorkerSounds.GREET.get(), 0.6f, voicePitch());
     }
 
     private void updateCombatStatus() {
         if (getTarget() != null) {
-            status = "Fighting " + getTarget().getName().getString();
+            setStatusKey(Lang.STATUS_FIGHTING, getTarget().getName().getString());
             return;
         }
-        status = switch (companionMode == null ? "follow" : companionMode) {
-            case "guard" -> "Guarding the village";
-            case "stay" -> "Holding position";
-            default -> "Following you";
-        };
+        setStatusKey(switch (companionMode == null ? "follow" : companionMode) {
+            case "guard" -> Lang.STATUS_GUARDING;
+            case "stay" -> Lang.STATUS_HOLDING;
+            default -> Lang.STATUS_FOLLOWING;
+        });
     }
 
     private void tryEatAndHeal(ServerLevel level) {
         if (getHealth() >= getMaxHealth() - 0.5f) return;
-        if (tickCount % 40 == 0 && getHealth() < getMaxHealth()) {
+        // Called once per work tick (every 20 game ticks); heal half a heart every other call.
+        if (++regenCounter % 2 == 0 && getHealth() < getMaxHealth()) {
             heal(0.5f);
         }
         if (getHealth() > getMaxHealth() * 0.5f) return;
+        // Eat the most filling thing in the bag (a cooked meal over a raw one).
+        int best = -1;
+        int bestNutrition = -1;
         for (int i = 0; i < bag.getContainerSize(); i++) {
+            FoodProperties food = bag.getItem(i).getFoodProperties(this);
+            if (food != null && food.nutrition() > bestNutrition) { best = i; bestNutrition = food.nutrition(); }
+        }
+        for (int i = (best < 0 ? bag.getContainerSize() : best); i < bag.getContainerSize(); i++) {
             ItemStack stack = bag.getItem(i);
             FoodProperties food = stack.getFoodProperties(this);
             if (food == null) continue;
             stack.shrink(1);
             heal(Math.max(2f, food.nutrition()));
             playSound(SoundEvents.GENERIC_EAT, 0.6f, 1.0f);
-            status = "Eating to recover";
+            setStatusKey(Lang.STATUS_EATING);
             return;
         }
     }
@@ -382,81 +823,20 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
 
     /**
      * Walk until within {@code horizontal} blocks sideways and {@code vertical} blocks up/down of pos.
-     * Called once per second. When no progress is made the target is marked unreachable and, after
-     * repeated failures, the worker hops to a safe spot beside it instead of giving up.
+     * Called once per second. See {@link WorkerNav} for stuck recovery; a pending errand (supply
+     * fetch, crafting trip) is walked first and makes this return false until it is done.
      */
     boolean approachWithin(BlockPos pos, double horizontal, double vertical) {
+        // Site and site-construction workers use the site router (visible stand spots, automatic
+        // retry, never a teleport); everyone else uses WorkerNav with errands and stuck recovery.
         if (siteId != null || constructionId != null) return SiteNavigation.approach(this, pos, horizontal, vertical);
-        if (!level().isLoaded(pos)) { status = "Target chunk unloaded"; return false; }
-        if (!pos.equals(navigationTarget)) resetRoute(pos);
-        double dx = getX() - (pos.getX() + 0.5);
-        double dz = getZ() - (pos.getZ() + 0.5);
-        double dy = Math.abs(pos.getY() + 0.5 - getY());
-        if (dx * dx + dz * dz <= horizontal * horizontal && dy <= vertical) {
-            if (siteId != null) {
-                var hit = level().clip(new net.minecraft.world.level.ClipContext(getEyePosition(), pos.getCenter(), net.minecraft.world.level.ClipContext.Block.COLLIDER, net.minecraft.world.level.ClipContext.Fluid.NONE, this));
-                boolean managedTree = "forester".equals(role) && level().getBlockState(hit.getBlockPos()).getBlock() instanceof SiteBlocks.ManagedBlock;
-                boolean sameChest = level() instanceof ServerLevel server && level().getBlockState(pos).getBlock() instanceof net.minecraft.world.level.block.ChestBlock && WarehouseJobs.canonical(server, pos).equals(WarehouseJobs.canonical(server, hit.getBlockPos()));
-                if (hit.getType() != net.minecraft.world.phys.HitResult.Type.MISS && !hit.getBlockPos().equals(pos) && !managedTree && !sameChest) {
-                    routeFailed(pos);
-                    return false;
-                }
-            }
-            getNavigation().stop();
-            resetRoute(pos);
-            failedRoutes = 0;
-            return true;
-        }
-        double distance = distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-        boolean improved = distance < lastDistance - 0.5;
-        boolean moved = lastCheckPos != null && position().distanceToSqr(lastCheckPos) > 0.25;
-        if (improved) { lastDistance = distance; noProgressTicks = 0; stuckTicks = 0; }
-        else {
-            noProgressTicks++;
-            if (!moved) stuckTicks++;
-        }
-        lastCheckPos = position();
-        if (stuckTicks >= 6 || noProgressTicks >= 30) {
-            routeFailed(pos);
-            return false;
-        }
-        // Cache path: only repath when target changed or navigation finished.
-        if (getNavigation().isDone() || getNavigation().getPath() == null) {
-            getNavigation().moveTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, 1);
-        }
-        setStatus("Traveling to " + pos.toShortString());
-        return false;
+        return nav.approachWithin(pos, horizontal, vertical, null);
     }
 
-    private void resetRoute(BlockPos pos) {
-        navigationTarget = pos;
-        stuckTicks = 0;
-        noProgressTicks = 0;
-        lastDistance = Double.MAX_VALUE;
-        lastCheckPos = null;
-    }
-
-    private void routeFailed(BlockPos pos) {
-        getNavigation().stop();
-        if (siteId != null || constructionId != null) {
-            working = false;
-            SiteJobs.suspend(this);
-            WarehouseJobs.release(getUUID());
-            setStatus("Blocked route at " + pos.toShortString() + " — clear path, then Start work");
-            return;
-        }
-        boolean repeat = isUnreachable(pos);
-        failedRoutes++;
-        unreachable.put(pos.asLong(), level().getGameTime() + 2400);
-        navigationTarget = null;
-        if ((repeat || failedRoutes >= 3) && hopNear(pos)) {
-            failedRoutes = 0;
-            unreachable.remove(pos.asLong());
-            status = "Got unstuck near " + pos.toShortString();
-            return;
-        }
-        if (pos.equals(target)) target = null;
-        status = "Can't reach " + pos.toShortString() + " — trying another spot";
+    /** Approach a job block from a free stand spot beside it; true once it is within vanilla reach. */
+    boolean approachStand(BlockPos target) {
+        if (siteId != null || constructionId != null) return SiteNavigation.approach(this, target, 3, 3);
+        return nav.approachStand(target);
     }
 
     boolean isUnreachable(BlockPos pos) {
@@ -466,22 +846,9 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         return true;
     }
 
-    /** Teleport to the closest safe standing spot beside pos (within 64 blocks). */
+    /** Teleport fallback beside pos, limited to 16 blocks sideways and 4 up/down; see {@link WorkerNav#hopNear}. */
     boolean hopNear(BlockPos pos) {
-        if (!(level() instanceof ServerLevel level)) return false;
-        if (distanceToSqr(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5) > 64 * 64) return false;
-        BlockPos best = null;
-        double bestDistance = Double.MAX_VALUE;
-        for (BlockPos p : BlockPos.betweenClosed(pos.offset(-2, -3, -2), pos.offset(2, 3, 2))) {
-            if (p.equals(pos) || p.above().equals(pos)) continue;
-            if (!canStandAt(level, p)) continue;
-            double d = p.distSqr(pos);
-            if (d < bestDistance) { bestDistance = d; best = p.immutable(); }
-        }
-        if (best == null) return false;
-        getNavigation().stop();
-        teleportTo(best.getX() + 0.5, best.getY(), best.getZ() + 0.5);
-        return true;
+        return nav.hopNear(pos);
     }
 
     static boolean canStandAt(Level level, BlockPos p) {
@@ -501,10 +868,10 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         getNavigation().stop();
         if (distanceToSqr(player) > 40 * 40) {
             teleportTo(player.getX(), player.getY(), player.getZ());
-            status = "Came to you (paused)";
+            setStatusKey(Lang.STATUS_CAME_TO_YOU);
         } else {
             getNavigation().moveTo(player, 1.1);
-            status = "Coming to you (paused)";
+            setStatusKey(Lang.STATUS_COMING_TO_YOU);
         }
     }
 
@@ -530,21 +897,30 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         return new AreaBounds(minX, bottom, minZ, maxX, top, maxZ);
     }
 
+    /** Work areas up to 512 x 512 columns and 64M blocks (a 300 x 300 forest, a mountain to level, a pit to bedrock). */
+    static final int MAX_AREA_SIDE = 512;
+    static final long MAX_AREA_VOLUME = 64_000_000L;
+    static final long LARGE_AREA = 32768;
+
     record AreaBounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
         int dx() { return maxX - minX + 1; }
         int dy() { return maxY - minY + 1; }
         int dz() { return maxZ - minZ + 1; }
         long volume() { return (long) dx() * dy() * dz(); }
+        /** Above the old 32768-block limit: scanned with heightmap skips instead of block by block. */
+        boolean large() { return volume() > LARGE_AREA; }
     }
 
     void collect(ItemStack stack) {
+        noteRequestProgress(stack);
+        gainXp(1);
         ItemStack remaining = bag.addItem(stack);
         if (!remaining.isEmpty()) {
             spawnAtLocation(remaining);
             needsUnload = true;
-            if (output != null) status = "Inventory full — dropping off at chest";
+            if (output != null) setStatusKey(Lang.STATUS_INVENTORY_FULL_DROPOFF);
             else {
-                status = Jobs.OUT_OF_SPACE;
+                setStatusKey(Lang.STATUS_FULL);
                 working = false;
                 target = null;
                 getNavigation().stop();
@@ -556,7 +932,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         ItemStack bow = getItemInHand(ProjectileUtil.getWeaponHoldingHand(this, item -> item instanceof BowItem));
         if (bow.isEmpty()) bow = getMainHandItem();
         ItemStack arrow = findArrow();
-        if (arrow.isEmpty()) { status = "Out of arrows"; return; }
+        if (arrow.isEmpty()) { setStatusKey(Lang.STATUS_OUT_OF_ARROWS); return; }
         AbstractArrow projectile = ProjectileUtil.getMobArrow(this, arrow.copyWithCount(1), distanceFactor, bow);
         double dx = target.getX() - getX();
         double dy = target.getY(0.333) - projectile.getY();
@@ -614,10 +990,45 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         tag.putLong("LastUnload", lastUnloadGameTime);
         tag.putLong("RecoverUntil", recoverUntil);
         tag.putLong("IdleUntil", idleUntil);
+        tag.putLong("LastDeposit", lastDepositTime);
+        tag.putInt("Xp", xp);
+        tag.putString("Trait", trait == null ? "" : trait);
+        savePos(tag, "Hall", hall);
+        if (!reserves.isEmpty()) {
+            CompoundTag kept = new CompoundTag();
+            reserves.forEach(kept::putInt);
+            tag.put("Reserves", kept);
+        }
         tag.putBoolean("RanchShear", ranchShear);
         tag.putBoolean("RanchMilk", ranchMilk);
         tag.putBoolean("RanchEggs", ranchEggs);
         tag.putBoolean("RanchBreed", ranchBreed);
+        tag.putBoolean("RanchHoney", ranchHoney);
+        tag.putBoolean("RequestsStop", requestsStop);
+        tag.putBoolean("SupplyBuilders", supplyBuilders);
+        tag.putBoolean("FeedWorkers", feedWorkers);
+        tag.putBoolean("CraftMeals", craftMeals);
+        tag.putString("CourierMode", courierMode == null ? "zone" : courierMode);
+        if (!orders.isEmpty()) {
+            ListTag list = new ListTag();
+            for (Order o : orders) {
+                CompoundTag e = new CompoundTag();
+                e.putString("Item", o.item()); e.putInt("Count", o.count()); e.putInt("Done", o.done()); e.putBoolean("Auto", o.auto());
+                list.add(e);
+            }
+            tag.put("Orders", list);
+        }
+        if (!requests.isEmpty()) {
+            ListTag board = new ListTag();
+            for (Request r : requests) {
+                CompoundTag e = new CompoundTag();
+                e.putString("Item", r.item());
+                e.putInt("Count", r.count());
+                e.putInt("Done", r.done());
+                board.add(e);
+            }
+            tag.put("Requests", board);
+        }
         tag.putBoolean("Culling", culling);
         if (swordLender != null) tag.putUUID("SwordLender", swordLender);
         if (!borrowedSword.isEmpty()) tag.put("BorrowedSword", borrowedSword.save(registryAccess()));
@@ -625,15 +1036,63 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         tag.put("BlueprintBlocks", blueprintBlocks.copy());
         tag.put("BlueprintLibrary", blueprintLibrary.copy());
         tag.putInt("BuildRotation", buildRotation);
+        tag.putString("SitePrep", sitePrep == null ? SitePrep.CLEAR : sitePrep);
+        tag.putBoolean("SitePrepDone", sitePrepDone);
+        tag.putInt("PrepCursor", prepCursor);
+        tag.putBoolean("PrepOnly", prepOnly);
+        tag.putBoolean("ResumeAfterRecovery", resumeAfterRecovery);
+        if (!fellQueue.isEmpty()) {
+            ListTag logs = new ListTag();
+            for (BlockPos p : fellQueue) logs.add(net.minecraft.nbt.LongTag.valueOf(p.asLong()));
+            tag.put("FellQueue", logs);
+            if (fellBase != null) tag.putLong("FellBase", fellBase.asLong());
+            tag.putString("FellSapling", fellSapling == null ? "" : fellSapling);
+        }
+        tag.putInt("IdleLevel", idleLevel);
+        if (minePlan != null && !minePlan.isEmpty()) {
+            ListTag plan = new ListTag();
+            for (MinePlanner.Step step : minePlan) {
+                CompoundTag e = new CompoundTag();
+                e.putLong("P", step.pos().asLong());
+                e.putByte("K", (byte) step.kind().ordinal());
+                plan.add(e);
+            }
+            tag.put("MinePlan", plan);
+            tag.putInt("MinePlanIndex", minePlanIndex);
+        }
         savePos(tag, "First", first); savePos(tag, "Second", second); savePos(tag, "Bed", bed);
         savePos(tag, "Supply", supply); savePos(tag, "Output", output);
         savePos(tag, "CraftingTable", craftingTable); savePos(tag, "BuildOrigin", buildOrigin);
+        savePos(tag, "Anvil", anvil); savePos(tag, "Grindstone", grindstone); savePos(tag, "Stonecutter", stonecutter);
+        if (!toolTargets.isEmpty()) {
+            CompoundTag targets = new CompoundTag();
+            for (var e : toolTargets.entrySet()) targets.putInt(e.getKey(), e.getValue());
+            tag.put("ToolTargets", targets);
+        }
         ListTag furnaceTag = new ListTag();
         for (BlockPos p : furnaces) { CompoundTag e = new CompoundTag(); e.putLong("P", p.asLong()); furnaceTag.add(e); }
         tag.put("Furnaces", furnaceTag);
         ListTag pickupTag = new ListTag();
-        for (BlockPos p : pickups) { CompoundTag e = new CompoundTag(); e.putLong("P", p.asLong()); pickupTag.add(e); }
+        for (BlockPos p : pickups) {
+            CompoundTag e = new CompoundTag();
+            e.putLong("P", p.asLong());
+            List<String> filter = pickupFilters.get(p.asLong());
+            if (filter != null && !filter.isEmpty()) {
+                ListTag ids = new ListTag();
+                for (String id : filter) ids.add(StringTag.valueOf(id));
+                e.put("Filter", ids);
+            }
+            int keep = pickupKeep.getOrDefault(p.asLong(), 0);
+            if (keep > 0) e.putInt("Keep", keep);
+            pickupTag.add(e);
+        }
         tag.put("Pickups", pickupTag);
+        tag.putInt("CourierCursor", courierCursor);
+        if (!furnaceHaul.isEmpty()) {
+            ListTag haul = new ListTag();
+            for (String id : furnaceHaul) haul.add(StringTag.valueOf(id));
+            tag.put("FurnaceHaul", haul);
+        }
         ListTag items = new ListTag();
         for (int i = 0; i < bag.getContainerSize(); i++) if (!bag.getItem(i).isEmpty()) {
             CompoundTag entry = new CompoundTag(); entry.putByte("Slot", (byte) i);
@@ -674,10 +1133,42 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         lastUnloadGameTime = tag.getLong("LastUnload");
         recoverUntil = tag.getLong("RecoverUntil");
         idleUntil = tag.getLong("IdleUntil");
+        lastDepositTime = tag.getLong("LastDeposit");
+        xp = Math.max(0, tag.getInt("Xp"));
+        trait = tag.getString("Trait");
+        pickTraitIfMissing();
+        hall = readPos(tag, "Hall");
+        reserves.clear();
+        CompoundTag kept = tag.getCompound("Reserves");
+        for (String id : kept.getAllKeys()) if (kept.getInt(id) > 0) reserves.put(id, kept.getInt(id));
+        applyLevelHealth();
         ranchShear = !tag.contains("RanchShear") || tag.getBoolean("RanchShear");
         ranchMilk = !tag.contains("RanchMilk") || tag.getBoolean("RanchMilk");
         ranchEggs = !tag.contains("RanchEggs") || tag.getBoolean("RanchEggs");
         ranchBreed = !tag.contains("RanchBreed") || tag.getBoolean("RanchBreed");
+        ranchHoney = !tag.contains("RanchHoney") || tag.getBoolean("RanchHoney");
+        requestsStop = !tag.contains("RequestsStop") || tag.getBoolean("RequestsStop");
+        supplyBuilders = tag.getBoolean("SupplyBuilders");
+        feedWorkers = !tag.contains("FeedWorkers") || tag.getBoolean("FeedWorkers");
+        craftMeals = tag.getBoolean("CraftMeals");
+        courierMode = "porter".equals(tag.getString("CourierMode")) ? "porter" : "zone";
+        orders.clear();
+        ListTag orderList = tag.getList("Orders", Tag.TAG_COMPOUND);
+        for (int i = 0; i < orderList.size() && orders.size() < StonemasonJobs.MAX_ORDERS; i++) {
+            CompoundTag e = orderList.getCompound(i);
+            if (e.getString("Item").isEmpty() || e.getInt("Count") <= 0) continue;
+            orders.add(new Order(e.getString("Item"), e.getInt("Count"), Math.max(0, e.getInt("Done")), e.getBoolean("Auto")));
+        }
+        requests.clear();
+        ListTag board = tag.getList("Requests", Tag.TAG_COMPOUND);
+        for (int i = 0; i < board.size() && requests.size() < MAX_REQUESTS; i++) {
+            CompoundTag e = board.getCompound(i);
+            if (e.getString("Item").isEmpty() || e.getInt("Count") <= 0) continue;
+            requests.add(new Request(e.getString("Item"), e.getInt("Count"), Math.max(0, e.getInt("Done"))));
+        }
+        statusBase = status;
+        statusBaseCode = StatusText.literal(status);
+        statusCode = statusBaseCode;
         culling = tag.getBoolean("Culling");
         swordLender = tag.hasUUID("SwordLender") ? tag.getUUID("SwordLender") : null;
         borrowedSword = tag.contains("BorrowedSword")
@@ -687,15 +1178,72 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         blueprintBlocks = tag.getList("BlueprintBlocks", Tag.TAG_COMPOUND).copy();
         blueprintLibrary = tag.getList("BlueprintLibrary", Tag.TAG_COMPOUND).copy();
         buildRotation = tag.getInt("BuildRotation");
+        sitePrep = tag.contains("SitePrep") && SitePrep.isMode(tag.getString("SitePrep"))
+            ? tag.getString("SitePrep") : SitePrep.CLEAR;
+        // Older saves: a build already in progress keeps going without re-clearing its site.
+        sitePrepDone = tag.contains("SitePrepDone") ? tag.getBoolean("SitePrepDone") : scanCursor > 0;
+        prepCursor = tag.getInt("PrepCursor");
+        prepOnly = tag.getBoolean("PrepOnly");
+        resumeAfterRecovery = tag.getBoolean("ResumeAfterRecovery");
+        fellQueue.clear();
+        fellBase = null;
+        fellSapling = "";
+        if (tag.contains("FellQueue", Tag.TAG_LIST)) {
+            ListTag logs = tag.getList("FellQueue", Tag.TAG_LONG);
+            for (int i = 0; i < logs.size(); i++) fellQueue.add(BlockPos.of(((net.minecraft.nbt.LongTag) logs.get(i)).getAsLong()));
+            fellBase = tag.contains("FellBase") ? BlockPos.of(tag.getLong("FellBase")) : null;
+            fellSapling = tag.getString("FellSapling");
+        }
+        idleLevel = Math.min(3, Math.max(0, tag.getInt("IdleLevel")));
+        minePlan = null;
+        minePlanIndex = 0;
+        if (tag.contains("MinePlan", Tag.TAG_LIST)) {
+            ListTag plan = tag.getList("MinePlan", Tag.TAG_COMPOUND);
+            List<MinePlanner.Step> steps = new ArrayList<>(plan.size());
+            MinePlanner.Kind[] kinds = MinePlanner.Kind.values();
+            for (int i = 0; i < plan.size(); i++) {
+                CompoundTag e = plan.getCompound(i);
+                int k = e.getByte("K");
+                if (k < 0 || k >= kinds.length) continue;
+                steps.add(new MinePlanner.Step(BlockPos.of(e.getLong("P")), kinds[k]));
+            }
+            if (!steps.isEmpty()) {
+                minePlan = steps;
+                minePlanIndex = Math.min(Math.max(0, tag.getInt("MinePlanIndex")), steps.size());
+            }
+        }
         first = readPos(tag, "First"); second = readPos(tag, "Second"); bed = readPos(tag, "Bed");
         supply = readPos(tag, "Supply"); output = readPos(tag, "Output");
         craftingTable = readPos(tag, "CraftingTable"); buildOrigin = readPos(tag, "BuildOrigin");
+        anvil = readPos(tag, "Anvil"); grindstone = readPos(tag, "Grindstone"); stonecutter = readPos(tag, "Stonecutter");
+        toolTargets.clear();
+        if (tag.contains("ToolTargets", Tag.TAG_COMPOUND)) {
+            CompoundTag targets = tag.getCompound("ToolTargets");
+            for (String key : targets.getAllKeys()) if (ToolsmithJobs.TOOL_KEYS.contains(key)) toolTargets.put(key, targets.getInt(key));
+        }
         furnaces.clear();
         ListTag furnaceTag = tag.getList("Furnaces", Tag.TAG_COMPOUND);
         for (int i = 0; i < furnaceTag.size(); i++) furnaces.add(BlockPos.of(furnaceTag.getCompound(i).getLong("P")));
         pickups.clear();
+        pickupFilters.clear();
+        pickupKeep.clear();
         ListTag pickupTag = tag.getList("Pickups", Tag.TAG_COMPOUND);
-        for (int i = 0; i < pickupTag.size(); i++) pickups.add(BlockPos.of(pickupTag.getCompound(i).getLong("P")));
+        for (int i = 0; i < pickupTag.size(); i++) {
+            CompoundTag e = pickupTag.getCompound(i);
+            BlockPos p = BlockPos.of(e.getLong("P"));
+            pickups.add(p);
+            if (e.contains("Filter", Tag.TAG_LIST)) {
+                ListTag ids = e.getList("Filter", Tag.TAG_STRING);
+                List<String> filter = new ArrayList<>();
+                for (int j = 0; j < ids.size(); j++) filter.add(ids.getString(j));
+                if (!filter.isEmpty()) pickupFilters.put(p.asLong(), filter);
+            }
+            if (e.getInt("Keep") > 0) pickupKeep.put(p.asLong(), e.getInt("Keep"));
+        }
+        courierCursor = tag.getInt("CourierCursor");
+        furnaceHaul.clear();
+        ListTag haul = tag.getList("FurnaceHaul", Tag.TAG_STRING);
+        for (int i = 0; i < haul.size(); i++) furnaceHaul.add(haul.getString(i));
         bag.clearContent();
         ListTag items = tag.getList("Bag", Tag.TAG_COMPOUND);
         for (int i = 0; i < items.size(); i++) {
@@ -728,8 +1276,15 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
 
     /** Follow owner / patrol guard area / hold position. */
     static final class CompanionGoal extends Goal {
+        /** Follow mode teleports only beyond this many blocks ... */
+        static final double TELEPORT_DISTANCE = 48;
+        /** ... and only after this long without a usable path or progress toward the owner. */
+        static final int TELEPORT_STALL_TICKS = 100;
+
         private final Worker worker;
         private int cooldown;
+        private int stallTicks;
+        private double lastOwnerDistance = Double.MAX_VALUE;
 
         CompanionGoal(Worker worker) {
             this.worker = worker;
@@ -737,7 +1292,7 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         }
 
         @Override public boolean canUse() {
-            return WorkerActions.isCombatRole(worker.role) && worker.getTarget() == null;
+            return WorkerActions.isCombatRole(worker.role) && worker.getTarget() == null && !worker.nav.hasErrand();
         }
 
         @Override public void tick() {
@@ -775,25 +1330,38 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             Player owner = worker.findOwner();
             if (owner == null) return;
             double dist = worker.distanceToSqr(owner);
-            if (dist > 24 * 24) {
+            if (dist < 3 * 3) {
+                worker.getNavigation().stop();
+                stallTicks = 0;
+                lastOwnerDistance = dist;
+                return;
+            }
+            // Always try to walk first; a teleport needs the owner far away, on the ground, and
+            // the worker without a usable path or any progress for 5 s.
+            boolean pathed;
+            if (dist > 10 * 10) pathed = worker.getNavigation().moveTo(owner, 1.15);
+            else if (worker.getNavigation().isDone()) pathed = worker.getNavigation().moveTo(owner, 1.0);
+            else pathed = true;
+            boolean closing = dist < lastOwnerDistance - 1.0;
+            lastOwnerDistance = dist;
+            if (pathed && closing) stallTicks = 0;
+            else stallTicks += 10;
+            if (dist > TELEPORT_DISTANCE * TELEPORT_DISTANCE && owner.onGround() && stallTicks >= TELEPORT_STALL_TICKS) {
                 BlockPos near = owner.blockPosition();
-                if (!worker.hopNear(near)) {
+                if (!worker.nav.teleportBeside(near)) {
                     // Find any safe spot near owner instead of dropping into void/water.
                     for (BlockPos p : BlockPos.betweenClosed(near.offset(-3, -2, -3), near.offset(3, 2, 3))) {
                         if (Worker.canStandAt(worker.level(), p)) {
                             worker.teleportTo(p.getX() + 0.5, p.getY(), p.getZ() + 0.5);
-                            return;
+                            worker.hops++;
+                            WorkerPerf.recordHop();
+                            break;
                         }
                     }
                 }
-                return;
+                stallTicks = 0;
+                lastOwnerDistance = Double.MAX_VALUE;
             }
-            if (worker.isInWater() && dist > 8 * 8) {
-                if (worker.hopNear(owner.blockPosition())) return;
-            }
-            if (dist > 10 * 10) worker.getNavigation().moveTo(owner, 1.15);
-            else if (dist < 3 * 3) worker.getNavigation().stop();
-            else if (worker.getNavigation().isDone()) worker.getNavigation().moveTo(owner, 1.0);
         }
     }
 

@@ -10,6 +10,18 @@ final class SiteSettings {
     static final Map<String, ModConfigSpec.ConfigValue<String>> PICKAXES = new LinkedHashMap<>();
     static ModConfigSpec.IntValue TREE_SECONDS, STORAGE_LIMIT, ORE_MIN, ORE_MAX;
 
+    /** Config paths of the [sites] section, for the translation lint (see {@link Lang#all()}). */
+    static java.util.List<String> configPaths() {
+        java.util.List<String> paths = new java.util.ArrayList<>(java.util.List.of(
+            "sites", "oreMinSeconds", "oreMaxSeconds", "treeSeconds", "warehouseInventories"));
+        for (String ore : SiteCatalog.ORES) {
+            paths.add(ore + "Seconds");
+            paths.add(ore + "Yield");
+            paths.add(ore + "Pickaxe");
+        }
+        return paths;
+    }
+
     static void define(ModConfigSpec.Builder b) {
         b.push("sites");
         ORE_MIN = b.defineInRange("oreMinSeconds", 5, 1, 86400);

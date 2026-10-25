@@ -128,7 +128,7 @@ public final class Site05GameTests {
         CompoundTag entry=new CompoundTag();for(int i=0;i<entries.size();i++)if(entries.getCompound(i).getUUID("Id").equals(w.getUUID()))entry=entries.getCompound(i);
         h.assertTrue(entry.contains("Supply") && entry.contains("Output"),"Marker/storage positions saved");h.succeed();
     }
-    @GameTest(template="site_test",skyAccess=true)
+    @GameTest(template="site_test",skyAccess=true,timeoutTicks=800)
     public static void farmerRancherFisherAndSmelterUseSites(GameTestHelper h) {
         var p=h.makeMockServerPlayerInLevel();var origin=h.absolutePos(new BlockPos(2,1,2));
         var farm=SiteGameTests.site(h,p,"farm",origin);var farmer=SiteGameTests.worker(h,p,"farmer",farm.at(3,1,3));SiteActions.assign(p,farmer,farm);
@@ -144,7 +144,8 @@ public final class Site05GameTests {
         h.assertTrue(!fisher.bag.isEmpty(),"Fisher catches from built pool: "+fisher.status);fisher.discard();
         var smelt=SiteGameTests.site(h,p,"smelter",origin);var smelter=SiteGameTests.worker(h,p,"smelter",smelt.at(4,1,3));SiteActions.assign(p,smelter,smelt);
         StorageOps.at(h.getLevel(),smelt.supply()).setItem(0,new ItemStack(Items.RAW_IRON,8));
-        Jobs.tick(h.getLevel(),smelter);h.assertTrue(StorageOps.at(h.getLevel(),smelter.furnaces.get(0)).countItem(Items.RAW_IRON)==8,"Smelter loads site furnace");h.succeed();
+        // Since 0.9 the smelter walks to the supply chest before loading, so this takes a few work ticks.
+        h.succeedWhen(()->h.assertTrue(StorageOps.at(h.getLevel(),smelter.furnaces.get(0)).countItem(Items.RAW_IRON)==8,"Smelter loads site furnace: "+smelter.status));
     }
 
     @GameTest(template="site_test",skyAccess=true)

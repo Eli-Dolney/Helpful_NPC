@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    " B ",
+    "PEP",
+    "SSS"
+  ],
+  "key": {
+    "B": { "item": "minecraft:book" },
+    "P": { "tag": "minecraft:planks" },
+    "E": { "item": "minecraft:emerald" },
+    "S": { "item": "minecraft:stone_bricks" }
+  },
+  "result": { "id": "helpfulworkers:town_hall", "count": 1 }
+}

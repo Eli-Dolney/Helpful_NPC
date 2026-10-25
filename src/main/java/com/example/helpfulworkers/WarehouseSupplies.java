@@ -64,6 +64,9 @@ final class WarehouseSupplies {
             case "fisher" -> out.put("minecraft:fishing_rod",1);
             case "rancher" -> { out.put("minecraft:shears",1); out.put("minecraft:wheat",64); out.put("minecraft:bucket",16); }
             case "smelter" -> out.put("minecraft:coal",64);
+            case "cook" -> { out.put("minecraft:coal",64); out.put("minecraft:wheat",32); }
+            case "stonemason" -> { out.put("minecraft:cobblestone",64); out.put("minecraft:stone",64); out.put("minecraft:deepslate",32); }
+            case "toolsmith" -> { out.put("minecraft:stick",32); out.put("minecraft:iron_ingot",32); out.put("minecraft:cobblestone",32); out.put("minecraft:string",8); }
             case "knight" -> { out.put("minecraft:iron_sword",1); out.put("minecraft:shield",1); }
             case "archer" -> { out.put("minecraft:bow",1); out.put("minecraft:arrow",64); }
             case "builder" -> {

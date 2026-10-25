@@ -9,6 +9,12 @@ import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
 final class ClientModEvents {
     private ClientModEvents() {}
 
+    /** Mods list → Helpful Workers → Config: NeoForge's generated screen for the server and client configs. */
+    static void registerConfigScreen(net.neoforged.fml.ModContainer container) {
+        container.registerExtensionPoint(net.neoforged.neoforge.client.gui.IConfigScreenFactory.class,
+            net.neoforged.neoforge.client.gui.ConfigurationScreen::new);
+    }
+
     @SubscribeEvent
     static void screens(RegisterMenuScreensEvent event) {
         event.register(HelpfulWorkers.WORKER_MENU.get(), WorkerInventoryScreen::new);

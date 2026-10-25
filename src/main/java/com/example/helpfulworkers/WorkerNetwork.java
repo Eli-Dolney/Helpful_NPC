@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.ComponentSerialization;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -23,7 +25,8 @@ final class WorkerNetwork {
 
     @SubscribeEvent
     static void register(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("5");
+        // Both 0.9.0 (protocol 3) and 0.5.3 (protocol 5) changed payloads; the merged build is 6.
+        PayloadRegistrar registrar = event.registrar("6");
         SiteNetwork.register(registrar);
         WorkerAppearanceNetwork.register(registrar);
         registrar.playToClient(OpenDialoguePayload.TYPE, OpenDialoguePayload.STREAM_CODEC, WorkerNetwork::handleOpenDialogue);
@@ -40,7 +43,7 @@ final class WorkerNetwork {
     }
 
     static void sendRoster(ServerPlayer player) {
-        PacketDistributor.sendToPlayer(player, RosterPayload.from(player));
+        send(player, RosterPayload.from(player));
     }
 
     private static void handleRoster(RosterPayload payload, IPayloadContext context) {
@@ -54,8 +57,20 @@ final class WorkerNetwork {
         });
     }
 
+    /** One roster row. state is {@link Worker#STATE_IDLE} etc. (-1 = away), sinceDrop is ticks since the last drop-off (-1 = never). */
     record RosterEntry(int id, String name, String role, String status, boolean working,
-                       int x, int y, int z, int distance, boolean hasBed, boolean hasArea) {}
+                       int x, int y, int z, int distance, boolean hasBed, boolean hasArea, byte state, long sinceDrop, int level) {}
+
+    /** Blocked first (they need you), then working, idle, sleeping, and workers in unloaded chunks last. */
+    static int stateRank(byte state) {
+        return switch (state) {
+            case Worker.STATE_BLOCKED -> 0;
+            case Worker.STATE_WORKING -> 1;
+            case Worker.STATE_IDLE -> 2;
+            case Worker.STATE_SLEEPING -> 3;
+            default -> 4;
+        };
+    }
 
     record RosterPayload(List<RosterEntry> entries) implements CustomPacketPayload {
         static final Type<RosterPayload> TYPE = new Type<>(id("roster"));
@@ -74,6 +89,9 @@ final class WorkerNetwork {
                 buf.writeVarInt(e.distance());
                 buf.writeBoolean(e.hasBed());
                 buf.writeBoolean(e.hasArea());
+                buf.writeByte(e.state());
+                buf.writeVarLong(e.sinceDrop());
+                buf.writeVarInt(e.level());
             }
         }
 
@@ -83,7 +101,7 @@ final class WorkerNetwork {
             for (int i = 0; i < size; i++) {
                 entries.add(new RosterEntry(buf.readVarInt(), buf.readUtf(), buf.readUtf(), buf.readUtf(),
                     buf.readBoolean(), buf.readInt(), buf.readInt(), buf.readInt(), buf.readVarInt(),
-                    buf.readBoolean(), buf.readBoolean()));
+                    buf.readBoolean(), buf.readBoolean(), buf.readByte(), buf.readVarLong(), buf.readVarInt()));
             }
             return new RosterPayload(entries);
         }
@@ -95,9 +113,11 @@ final class WorkerNetwork {
                 seen.add(worker.getUUID());
                 BlockPos pos = worker.blockPosition();
                 entries.add(new RosterEntry(worker.getId(), worker.getName().getString(), worker.role,
-                    worker.status == null ? "" : worker.status, worker.working, pos.getX(), pos.getY(), pos.getZ(),
+                    worker.statusCode == null ? "" : worker.statusCode, worker.working, pos.getX(), pos.getY(), pos.getZ(),
                     (int) Math.sqrt(player.distanceToSqr(worker)), worker.bed != null,
-                    worker.first != null && worker.second != null));
+                    worker.first != null && worker.second != null, worker.clientState(),
+                    worker.lastDepositTime <= 0 ? -1 : Math.max(0, player.serverLevel().getGameTime() - worker.lastDepositTime),
+                    worker.workerLevel()));
             }
             // Unloaded workers from the registry (last known position).
             for (WorkerRegistry.Entry e : WorkerRegistry.forOwner(player.serverLevel(), player.getUUID())) {
@@ -106,9 +126,10 @@ final class WorkerNetwork {
                 int dist = (int) Math.sqrt(player.blockPosition().distSqr(pos));
                 String status = e.alive() ? "Unloaded chunk — last seen here" : "Missing (may need re-recruit)";
                 entries.add(new RosterEntry(-1, e.name() + " [away]", e.role(), status, false,
-                    pos.getX(), pos.getY(), pos.getZ(), dist, false, false));
+                    pos.getX(), pos.getY(), pos.getZ(), dist, false, false, (byte) -1, -1, 0));
             }
-            entries.sort(java.util.Comparator.comparingInt(RosterEntry::distance));
+            entries.sort(java.util.Comparator.comparingInt((RosterEntry r) -> stateRank(r.state()))
+                .thenComparingInt(RosterEntry::distance));
             return new RosterPayload(entries);
         }
 
@@ -127,44 +148,61 @@ final class WorkerNetwork {
 
     static void openDialogue(ServerPlayer player, Worker worker, String pendingRole) {
         WorkerSessions.openViewer(player, worker, WorkerSessions.ViewerKind.DIALOGUE);
-        PacketDistributor.sendToPlayer(player, OpenDialoguePayload.from(worker, pendingRole));
+        send(player, OpenDialoguePayload.from(worker, pendingRole));
+        sendRecipeList(player, worker);
+        sendBlueprintList(player, worker);
+    }
+
+    /** Open the dialogue from the roster at any distance (remote viewer: not closed for being far away). */
+    static void openDialogueRemote(ServerPlayer player, Worker worker) {
+        WorkerSessions.openViewer(player, worker, WorkerSessions.ViewerKind.DIALOGUE, true);
+        send(player, OpenDialoguePayload.from(worker, ""));
         sendRecipeList(player, worker);
         sendBlueprintList(player, worker);
     }
 
     static void openDepthPicker(ServerPlayer player, Worker worker, BlockPos first, BlockPos second) {
         WorkerSessions.openViewer(player, worker, WorkerSessions.ViewerKind.DIALOGUE, true);
-        PacketDistributor.sendToPlayer(player, new OpenDepthPickerPayload(worker.getId(), worker.getName().getString(),
+        send(player, new OpenDepthPickerPayload(worker.getId(), worker.getName().getString(),
             first.getX(), first.getY(), first.getZ(), second.getX(), second.getY(), second.getZ()));
         // Preview outline at depth 5 while choosing.
-        PacketDistributor.sendToPlayer(player, AreaOutlinePayload.preview(worker.getId(), first, second, 5, 120));
+        send(player, AreaOutlinePayload.preview(worker.getId(), first, second, 5, 120));
     }
 
     static void sendAreaOutline(ServerPlayer player, Worker worker, int ticks) {
-        if (net.neoforged.neoforge.network.registration.NetworkRegistry.hasChannel(player.connection, AreaOutlinePayload.TYPE.id()))
-            PacketDistributor.sendToPlayer(player, AreaOutlinePayload.from(worker, ticks));
+        send(player, AreaOutlinePayload.from(worker, ticks));
     }
 
     static void toast(ServerPlayer player, String message) {
-        PacketDistributor.sendToPlayer(player, new ToastPayload(message));
+        toast(player, Component.literal(message));
+    }
+
+    static void toast(ServerPlayer player, Component message) {
+        send(player, new ToastPayload(message));
+    }
+
+    /** Send only when the client negotiated our channel (vanilla clients and test mock players have not). */
+    static void send(ServerPlayer player, CustomPacketPayload payload) {
+        if (player == null || player.connection == null) return;
+        if (!player.connection.hasChannel(payload)) return;
+        PacketDistributor.sendToPlayer(player, payload);
     }
 
     static void syncStatusToViewers(Worker worker) {
         WorkerStatusPayload payload = WorkerStatusPayload.from(worker);
         for (Player player : worker.level().players()) {
-            if (player instanceof ServerPlayer serverPlayer && WorkerSessions.hasDialogueOrInventory(serverPlayer, worker)
-                && net.neoforged.neoforge.network.registration.NetworkRegistry.hasChannel(serverPlayer.connection, WorkerStatusPayload.TYPE.id())) {
-                PacketDistributor.sendToPlayer(serverPlayer, payload);
+            if (player instanceof ServerPlayer serverPlayer && WorkerSessions.hasDialogueOrInventory(serverPlayer, worker)) {
+                send(serverPlayer, payload);
             }
         }
     }
 
     static void sendRecipeList(ServerPlayer player, Worker worker) {
-        PacketDistributor.sendToPlayer(player, RecipeListPayload.from(worker));
+        send(player, RecipeListPayload.from(worker));
     }
 
     static void sendBlueprintList(ServerPlayer player, Worker worker) {
-        PacketDistributor.sendToPlayer(player, BlueprintListPayload.from(worker));
+        send(player, BlueprintListPayload.from(worker));
     }
 
     private static void handleOpenDialogue(OpenDialoguePayload payload, IPayloadContext context) {
@@ -261,7 +299,7 @@ final class WorkerNetwork {
         }
 
         static OpenDialoguePayload from(Worker worker, String pendingRole) {
-            return new OpenDialoguePayload(worker.getId(), worker.getName().getString(), worker.role, worker.status,
+            return new OpenDialoguePayload(worker.getId(), worker.getName().getString(), worker.role, worker.statusCode,
                 worker.working, worker.mode, pendingRole == null ? "" : pendingRole,
                 worker.first != null && worker.second != null, worker.bed != null, worker.supply != null,
                 worker.output != null, worker.craftingTable != null, worker.buildOrigin != null,
@@ -332,7 +370,7 @@ final class WorkerNetwork {
         }
 
         static WorkerStatusPayload from(Worker worker) {
-            return new WorkerStatusPayload(worker.getId(), worker.getName().getString(), worker.role, worker.status,
+            return new WorkerStatusPayload(worker.getId(), worker.getName().getString(), worker.role, worker.statusCode,
                 worker.working, worker.mode, worker.first != null && worker.second != null, worker.bed != null,
                 worker.supply != null, worker.output != null, worker.craftingTable != null, worker.buildOrigin != null,
                 worker.blueprint == null ? "" : worker.blueprint, worker.buildRotation, worker.digDepth,
@@ -394,10 +432,10 @@ final class WorkerNetwork {
         @Override public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
 
-    record ToastPayload(String message) implements CustomPacketPayload {
+    record ToastPayload(Component message) implements CustomPacketPayload {
         static final Type<ToastPayload> TYPE = new Type<>(id("toast"));
         static final StreamCodec<RegistryFriendlyByteBuf, ToastPayload> STREAM_CODEC = StreamCodec.composite(
-            ByteBufCodecs.STRING_UTF8, ToastPayload::message, ToastPayload::new
+            ComponentSerialization.STREAM_CODEC, ToastPayload::message, ToastPayload::new
         );
         @Override public Type<? extends CustomPacketPayload> type() { return TYPE; }
     }
