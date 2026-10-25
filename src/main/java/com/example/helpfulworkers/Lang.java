@@ -122,6 +122,25 @@ final class Lang {
     static final String STATUS_ASSIGN_FURNACES = "status.helpfulworkers.assign_furnaces";
     static final String STATUS_ASSIGN_SUPPLY = "status.helpfulworkers.assign_supply";
     static final String STATUS_FURNACES_IDLE = "status.helpfulworkers.furnaces_idle";
+    static final String STATUS_ASSIGN_WORKSHOP = "status.helpfulworkers.assign_workshop";
+    static final String STATUS_WORKSHOP_STOCKED = "status.helpfulworkers.workshop_stocked";
+    static final String STATUS_REPAIRING = "status.helpfulworkers.repairing";
+    static final String STATUS_REPAIRED = "status.helpfulworkers.repaired";
+    static final String STATUS_BRINGING_TOOL = "status.helpfulworkers.bringing_tool";
+    static final String STATUS_DELIVERED_TOOL = "status.helpfulworkers.delivered_tool";
+    static final String STATUS_NEED_TOOL_MATERIALS = "status.helpfulworkers.need_tool_materials";
+    static final String STATUS_NEED_REPAIR_MATERIAL = "status.helpfulworkers.need_repair_material";
+    static final String STATUS_ASSIGN_STONECUTTER = "status.helpfulworkers.assign_stonecutter";
+    static final String STATUS_CUTTING = "status.helpfulworkers.cutting";
+    static final String STATUS_NEED_STONE = "status.helpfulworkers.need_stone";
+    static final String STATUS_CANT_CUT = "status.helpfulworkers.cant_cut";
+    static final String STATUS_ORDERS_DONE = "status.helpfulworkers.orders_done";
+    static final String STATUS_NO_ORDERS = "status.helpfulworkers.no_orders";
+    static final String STATUS_ASSIGN_SMOKER = "status.helpfulworkers.assign_smoker";
+    static final String STATUS_FEEDING = "status.helpfulworkers.feeding";
+    static final String STATUS_FED = "status.helpfulworkers.fed";
+    static final String STATUS_NO_COOKED_FOOD = "status.helpfulworkers.no_cooked_food";
+    static final String STATUS_PORTER_NO_WORKERS = "status.helpfulworkers.porter_no_workers";
     static final String STATUS_ASSIGN_PICKUPS = "status.helpfulworkers.assign_pickups";
     static final String STATUS_ASSIGN_DROPOFF = "status.helpfulworkers.assign_dropoff";
     static final String STATUS_ASSIGN_SUPPLY_FURNACES = "status.helpfulworkers.assign_supply_furnaces";
@@ -290,6 +309,30 @@ final class Lang {
     static final String LOC_SUPPLY_FURNACE = "gui.helpfulworkers.dialogue.loc.supply_furnace";
     static final String LOC_FEED = "gui.helpfulworkers.dialogue.loc.feed";
     static final String LOC_TABLE = "gui.helpfulworkers.dialogue.loc.table";
+    static final String LOC_ANVIL = "gui.helpfulworkers.dialogue.loc.anvil";
+    static final String LOC_GRINDSTONE = "gui.helpfulworkers.dialogue.loc.grindstone";
+    static final String LOC_STONECUTTER = "gui.helpfulworkers.dialogue.loc.stonecutter";
+    // Toolsmith stock page
+    static final String TOOLS_KEEP = "gui.helpfulworkers.dialogue.tools.keep";
+    static final String TOOLS_TIP = "gui.helpfulworkers.dialogue.tools.tip";
+    static final String TOOLS_INFO = "gui.helpfulworkers.dialogue.tools.info";
+    // Stonemason orders page
+    static final String ORDERS_ADD = "gui.helpfulworkers.dialogue.orders.add";
+    static final String ORDERS_ADD_TIP = "gui.helpfulworkers.dialogue.orders.add_tip";
+    static final String ORDERS_CUT_TIP = "gui.helpfulworkers.dialogue.orders.cut_tip";
+    static final String ORDERS_AUTO = "gui.helpfulworkers.dialogue.orders.auto";
+    static final String ORDERS_SUPPLY_BUILDERS = "gui.helpfulworkers.dialogue.orders.supply_builders";
+    static final String ORDERS_CLEAR = "gui.helpfulworkers.dialogue.orders.clear";
+    static final String ORDERS_NOTE = "gui.helpfulworkers.dialogue.orders.note";
+    // Cook options and courier modes
+    static final String COOK_FEED = "gui.helpfulworkers.dialogue.cook.feed";
+    static final String COOK_MEALS = "gui.helpfulworkers.dialogue.cook.meals";
+    static final String COOK_NOTE = "gui.helpfulworkers.dialogue.cook.note";
+    static final String LOC_SMOKER = "gui.helpfulworkers.dialogue.loc.smoker";
+    static final String ROUTE_MODE_ZONE = "gui.helpfulworkers.dialogue.route.mode_zone";
+    static final String ROUTE_MODE_PORTER = "gui.helpfulworkers.dialogue.route.mode_porter";
+    static final String ROUTE_MODE_TIP = "gui.helpfulworkers.dialogue.route.mode_tip";
+    static final String ROUTE_PORTER_NOTE = "gui.helpfulworkers.dialogue.route.porter_note";
     static final String LOC_CHANGE = "gui.helpfulworkers.dialogue.loc.change";
     static final String LOC_ASSIGN = "gui.helpfulworkers.dialogue.loc.assign";
     static final String LOC_NOT_ASSIGNED = "gui.helpfulworkers.dialogue.loc.not_assigned";
@@ -351,6 +394,7 @@ final class Lang {
     static final List<String> AREA_ROLES = List.of("forester", "farmer", "miner", "rancher", "fisher", "gatherer");
 
     static String modeKey(String mode) { return "gui.helpfulworkers.dialogue.mode." + mode; }
+    static String toolKey(String tool) { return "gui.helpfulworkers.dialogue.tools." + tool; }
 
     static String modeTipKey(String mode) { return modeKey(mode) + ".tip"; }
 
@@ -416,6 +460,7 @@ final class Lang {
             keys.add(kitDescKey(role));
         }
         for (String mode : MINER_MODES) { keys.add(modeKey(mode)); keys.add(modeTipKey(mode)); }
+        for (String tool : ToolsmithJobs.TOOL_KEYS) keys.add(toolKey(tool));
         for (String id : CROP_IDS) keys.add(cropKey(id));
         for (String biome : BIOMES) keys.add(biomeKey(biome));
         for (String role : AREA_ROLES) keys.add(areaKey(role));

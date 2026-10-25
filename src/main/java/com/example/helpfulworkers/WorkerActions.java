@@ -182,6 +182,14 @@ final class WorkerActions {
         if (worker.siteId != null || worker.constructionId != null) return ActionResult.fail("Release the site or finish construction first");
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
+        if ("courier".equals(worker.role)) {
+            if (!"zone".equals(mode) && !"porter".equals(mode)) return ActionResult.fail("Courier modes are zone or porter");
+            worker.courierMode = mode;
+            worker.porterPickups.clear();
+            worker.lastPorterScan = 0;
+            sync(worker);
+            return ActionResult.ok("porter".equals(mode) ? "Collecting from every worker's output chest nearby" : "Hauling between the assigned chests");
+        }
         if (!isMineMode(mode)) return ActionResult.fail("Unknown mining mode");
         if (!"miner".equals(worker.role)) return ActionResult.fail("Mining mode is only for miners");
         worker.mode = mode;
@@ -265,6 +273,7 @@ final class WorkerActions {
         if (check != null) return check;
         if (held == null || held.isEmpty()) return ActionResult.fail("Hold the item you need, then ask again");
         if (isCombatRole(worker.role)) return ActionResult.fail("Knights and archers don't collect things");
+        if ("stonemason".equals(worker.role)) return addOrder(player, worker, held, count);
         count = Math.max(1, Math.min(2304, count));
         String id = ExtraJobs.itemId(held);
         String name = held.getHoverName().getString();
@@ -304,6 +313,79 @@ final class WorkerActions {
         worker.refreshStatus();
         sync(worker);
         return ActionResult.ok("Request list cleared");
+    }
+
+    /** Stonemason: cut this many of the held item (must be a stonecutter product). */
+    static ActionResult addOrder(ServerPlayer player, Worker worker, ItemStack held, int count) {
+        ActionResult check = requireOwned(player, worker);
+        if (check != null) return check;
+        if (!"stonemason".equals(worker.role)) return ActionResult.fail("Only stonemasons take cutting orders");
+        if (held == null || held.isEmpty()) return ActionResult.fail("Hold the block you want cut, then ask again");
+        if (!(worker.level() instanceof ServerLevel level) || !StonemasonJobs.canCut(level, held)) {
+            return ActionResult.fail(held.getHoverName().getString() + " can't be made on a stonecutter");
+        }
+        count = Math.max(1, Math.min(2304, count));
+        String id = ExtraJobs.itemId(held);
+        String name = held.getHoverName().getString();
+        for (int i = 0; i < worker.orders.size(); i++) {
+            Worker.Order o = worker.orders.get(i);
+            if (!o.item().equals(id)) continue;
+            worker.orders.set(i, new Worker.Order(id, o.count() + count, o.done(), false));
+            sync(worker);
+            return ActionResult.ok("Now cutting " + (o.count() + count) + " " + name + " (" + o.done() + " so far)");
+        }
+        if (worker.orders.size() >= StonemasonJobs.MAX_ORDERS) {
+            return ActionResult.fail("The order list is full (" + StonemasonJobs.MAX_ORDERS + " items). Clear one first.");
+        }
+        worker.orders.add(new Worker.Order(id, count, 0, false));
+        sync(worker);
+        return ActionResult.ok("Order placed: " + count + " " + name);
+    }
+
+    static ActionResult removeOrder(ServerPlayer player, Worker worker, String indexArg) {
+        ActionResult check = requireOwned(player, worker);
+        if (check != null) return check;
+        int index;
+        try { index = Integer.parseInt(indexArg.trim()); } catch (NumberFormatException ex) { return ActionResult.fail("No such order"); }
+        if (index < 0 || index >= worker.orders.size()) return ActionResult.fail("No such order");
+        Worker.Order removed = worker.orders.remove(index);
+        sync(worker);
+        return ActionResult.ok("Dropped " + Worker.requestName(removed.item()) + " from the orders");
+    }
+
+    static ActionResult clearOrders(ServerPlayer player, Worker worker) {
+        ActionResult check = requireOwned(player, worker);
+        if (check != null) return check;
+        worker.orders.clear();
+        sync(worker);
+        return ActionResult.ok("Orders cleared");
+    }
+
+    static ActionResult toggleSupplyBuilders(ServerPlayer player, Worker worker) {
+        ActionResult check = requireOwned(player, worker);
+        if (check != null) return check;
+        if (!"stonemason".equals(worker.role)) return ActionResult.fail("Only stonemasons supply builders");
+        worker.supplyBuilders = !worker.supplyBuilders;
+        worker.lastOrderScan = 0;
+        if (!worker.supplyBuilders) worker.orders.removeIf(Worker.Order::auto);
+        sync(worker);
+        return ActionResult.ok(worker.supplyBuilders ? "Cutting whatever nearby builders' blueprints still need" : "Only cutting your own orders");
+    }
+
+    /** Cook options: feed hungry workmates / bake bread. */
+    static ActionResult toggleCookFlag(ServerPlayer player, Worker worker, String flag) {
+        ActionResult check = requireMenu(player, worker);
+        if (check != null) return check;
+        if (!"cook".equals(worker.role)) return ActionResult.fail("Only cooks have kitchen options");
+        switch (flag) {
+            case "feed" -> worker.feedWorkers = !worker.feedWorkers;
+            case "meals" -> worker.craftMeals = !worker.craftMeals;
+            default -> { return ActionResult.fail("Unknown kitchen option"); }
+        }
+        worker.lastFeedScan = 0;
+        sync(worker);
+        boolean on = "feed".equals(flag) ? worker.feedWorkers : worker.craftMeals;
+        return ActionResult.ok(("feed".equals(flag) ? "Feeding workmates" : "Baking bread") + (on ? " on" : " off"));
     }
 
     static ActionResult toggleRequestStop(ServerPlayer player, Worker worker) {
@@ -603,6 +685,64 @@ final class WorkerActions {
         return ActionResult.ok("Assigned crafting table at " + pos.toShortString());
     }
 
+    /** Craft-trade workstations: anvil / grindstone (toolsmith), stonecutter (stonemason). */
+    static ActionResult setWorkstation(ServerPlayer player, Worker worker, String kind, BlockPos pos) {
+        ActionResult check = requireOwned(player, worker);
+        if (check != null) return check;
+        ActionResult range = requireNear(player, pos);
+        if (range != null) return range;
+        var state = worker.level().getBlockState(pos);
+        switch (kind) {
+            case "anvil" -> {
+                if (!(state.getBlock() instanceof net.minecraft.world.level.block.AnvilBlock)) return ActionResult.fail("Look at an anvil");
+                if (!"toolsmith".equals(worker.role)) return ActionResult.fail("Only toolsmiths use an anvil");
+                worker.anvil = pos.immutable();
+            }
+            case "grindstone" -> {
+                if (!state.is(Blocks.GRINDSTONE)) return ActionResult.fail("Look at a grindstone");
+                if (!"toolsmith".equals(worker.role)) return ActionResult.fail("Only toolsmiths use a grindstone");
+                worker.grindstone = pos.immutable();
+            }
+            case "stonecutter" -> {
+                if (!state.is(Blocks.STONECUTTER)) return ActionResult.fail("Look at a stonecutter");
+                if (!"stonemason".equals(worker.role)) return ActionResult.fail("Only stonemasons use a stonecutter");
+                worker.stonecutter = pos.immutable();
+            }
+            default -> { return ActionResult.fail("Unknown workstation"); }
+        }
+        sync(worker);
+        return ActionResult.ok("Assigned " + kind + " at " + pos.toShortString());
+    }
+
+    static ActionResult clearWorkstation(ServerPlayer player, Worker worker, String kind) {
+        ActionResult check = requireOwned(player, worker);
+        if (check != null) return check;
+        switch (kind) {
+            case "anvil" -> worker.anvil = null;
+            case "grindstone" -> worker.grindstone = null;
+            case "stonecutter" -> worker.stonecutter = null;
+            default -> { return ActionResult.fail("Unknown workstation"); }
+        }
+        sync(worker);
+        return ActionResult.ok(Character.toUpperCase(kind.charAt(0)) + kind.substring(1) + " assignment cleared");
+    }
+
+    /** Toolsmith: cycle how many spare tools of a kind to keep in stock (0/1/2/4). */
+    static ActionResult cycleToolTarget(ServerPlayer player, Worker worker, String key) {
+        ActionResult check = requireMenu(player, worker);
+        if (check != null) return check;
+        if (!"toolsmith".equals(worker.role)) return ActionResult.fail("Only toolsmiths keep tool stock");
+        if (!ToolsmithJobs.TOOL_KEYS.contains(key)) return ActionResult.fail("Unknown tool");
+        int current = ToolsmithJobs.target(worker, key);
+        int next = ToolsmithJobs.TARGET_STEPS[0];
+        for (int i = 0; i < ToolsmithJobs.TARGET_STEPS.length; i++) {
+            if (ToolsmithJobs.TARGET_STEPS[i] == current) { next = ToolsmithJobs.TARGET_STEPS[(i + 1) % ToolsmithJobs.TARGET_STEPS.length]; break; }
+        }
+        worker.toolTargets.put(key, next);
+        sync(worker);
+        return ActionResult.ok(next == 0 ? "No spare " + ToolsmithJobs.label(key) + " kept" : "Keeping " + next + " spare " + ToolsmithJobs.label(key));
+    }
+
     static ActionResult setBuildOrigin(ServerPlayer player, Worker worker, BlockPos pos) {
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
@@ -659,8 +799,8 @@ final class WorkerActions {
     static ActionResult addFurnace(ServerPlayer player, Worker worker, BlockPos pos) {
         ActionResult check = requireOwned(player, worker);
         if (check != null) return check;
-        if (!"smelter".equals(worker.role) && !"courier".equals(worker.role)) {
-            return ActionResult.fail("Only smelters and couriers use furnaces");
+        if (!"smelter".equals(worker.role) && !"courier".equals(worker.role) && !"cook".equals(worker.role)) {
+            return ActionResult.fail("Only smelters, cooks and couriers use furnaces");
         }
         ActionResult range = requireNear(player, pos);
         if (range != null) return range;
@@ -998,7 +1138,7 @@ final class WorkerActions {
         return names;
     }
 
-    static final List<String> ROLES = List.of("farmer", "forester", "miner", "builder", "knight", "archer",
+    static final List<String> ROLES = List.of("farmer", "forester", "miner", "builder", "knight", "archer", "toolsmith", "stonemason", "cook",
         "rancher", "fisher", "smelter", "courier", "gatherer");
 
     static boolean isRole(String role) {
@@ -1037,6 +1177,9 @@ final class WorkerActions {
             case "smelter" -> HelpfulWorkers.SMELTER_KIT.get();
             case "courier" -> HelpfulWorkers.COURIER_KIT.get();
             case "gatherer" -> HelpfulWorkers.GATHERER_KIT.get();
+            case "toolsmith" -> HelpfulWorkers.TOOLSMITH_KIT.get();
+            case "stonemason" -> HelpfulWorkers.STONEMASON_KIT.get();
+            case "cook" -> HelpfulWorkers.COOK_KIT.get();
             default -> null;
         };
     }
@@ -1053,6 +1196,9 @@ final class WorkerActions {
         if (item == HelpfulWorkers.SMELTER_KIT.get()) return "smelter";
         if (item == HelpfulWorkers.COURIER_KIT.get()) return "courier";
         if (item == HelpfulWorkers.GATHERER_KIT.get()) return "gatherer";
+        if (item == HelpfulWorkers.TOOLSMITH_KIT.get()) return "toolsmith";
+        if (item == HelpfulWorkers.STONEMASON_KIT.get()) return "stonemason";
+        if (item == HelpfulWorkers.COOK_KIT.get()) return "cook";
         return null;
     }
 
@@ -1069,6 +1215,9 @@ final class WorkerActions {
             case "smelter" -> "Smelter";
             case "courier" -> "Courier";
             case "gatherer" -> "Gatherer";
+            case "toolsmith" -> "Toolsmith";
+            case "stonemason" -> "Stonemason";
+            case "cook" -> "Cook";
             default -> role;
         };
     }

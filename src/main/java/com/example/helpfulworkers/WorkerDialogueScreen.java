@@ -20,7 +20,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public final class WorkerDialogueScreen extends Screen {
     private enum Page {
         MAIN, WORK, ROLE, LOCATIONS, RECIPES, BUILD, BLUEPRINT, ROLE_CONFIRM, CAPTURE_CONFIRM,
-        MESSAGE, DEPTH, PROTECT, CROPS, TARGET_Y, BIOME, RANCH, CULL_CONFIRM, ROUTES, REQUESTS
+        MESSAGE, DEPTH, PROTECT, CROPS, TARGET_Y, BIOME, RANCH, CULL_CONFIRM, ROUTES, REQUESTS, TOOLS, ORDERS, COOK
     }
 
     private static final ResourceLocation PORTRAIT =
@@ -165,6 +165,9 @@ public final class WorkerDialogueScreen extends Screen {
             case "farmer", "gatherer" -> Page.CROPS;
             case "rancher" -> Page.RANCH;
             case "courier" -> Page.ROUTES;
+            case "toolsmith" -> Page.TOOLS;
+            case "stonemason" -> Page.ORDERS;
+            case "cook" -> Page.COOK;
             case "knight", "archer" -> Page.PROTECT;
             default -> null;
         };
@@ -174,7 +177,7 @@ public final class WorkerDialogueScreen extends Screen {
     private Page tabOf(Page p) {
         return switch (p) {
             case ROLE, DEPTH, TARGET_Y -> Page.WORK;
-            case PROTECT, CROPS, RANCH, ROUTES, CULL_CONFIRM -> optionsPage();
+            case PROTECT, CROPS, RANCH, ROUTES, TOOLS, ORDERS, COOK, CULL_CONFIRM -> optionsPage();
             case BIOME, BLUEPRINT, CAPTURE_CONFIRM -> Page.BUILD;
             case MESSAGE, ROLE_CONFIRM -> Page.MAIN;
             default -> p;
@@ -341,6 +344,9 @@ public final class WorkerDialogueScreen extends Screen {
             case RANCH -> buildRanch(left, top);
             case CULL_CONFIRM -> buildCullConfirm(left, top);
             case ROUTES -> buildRoutes(left, top);
+            case TOOLS -> buildTools(left, top);
+            case ORDERS -> buildOrders(left, top);
+            case COOK -> buildCook(left, top);
             case REQUESTS -> buildRequests(left, top);
         }
         paginate(left);
@@ -628,7 +634,20 @@ public final class WorkerDialogueScreen extends Screen {
 
     /** One pickup chest per row: its filter (click with an item in hand to add it), clear, keep N, remove. */
     private void buildRoutes(int left, int top) {
-        int y = contentTop() + 12;
+        int y = contentTop();
+        boolean porter = flags.contains("courier:porter");
+        addRenderableWidget(Button.builder(Component.translatable(porter ? Lang.ROUTE_MODE_PORTER : Lang.ROUTE_MODE_ZONE),
+                b -> send("set_mode", porter ? "zone" : "porter"))
+            .tooltip(Tooltip.create(Component.translatable(Lang.ROUTE_MODE_TIP)))
+            .bounds(left + 12, y, 252, 20).build());
+        y += 24;
+        if (porter) {
+            addRenderableWidget(Button.builder(Component.translatable(Lang.ROUTE_PORTER_NOTE), b -> {})
+                .bounds(left + 12, y, 252, 20).build());
+            y += 28;
+            addBack(left, Math.min(y, contentBottom()));
+            return;
+        }
         java.util.List<String[]> pickups = pickupRows();
         for (String[] row : pickups) {
             String index = row[0];
@@ -657,6 +676,93 @@ public final class WorkerDialogueScreen extends Screen {
         }
         if (pickups.isEmpty()) y += 22;
         addRenderableWidget(Button.builder(Component.translatable(Lang.ROUTE_ADD), b -> send("start_assign", "pickup"))
+            .bounds(left + 12, y, 252, 20).build());
+        y += 24;
+        addBack(left, Math.min(y, contentBottom()));
+    }
+
+    /** Cook options: feed hungry workmates, bake bread. */
+    private void buildCook(int left, int top) {
+        int y = contentTop();
+        checkbox(left + 12, y, "feedworkers", Component.translatable(Lang.COOK_FEED), "toggle_cook_flag", "feed");
+        y += 20;
+        checkbox(left + 12, y, "craftmeals", Component.translatable(Lang.COOK_MEALS), "toggle_cook_flag", "meals");
+        y += 26;
+        addRenderableWidget(Button.builder(Component.translatable(Lang.COOK_NOTE), b -> {})
+            .bounds(left + 12, y, 252, 20).build());
+        y += 28;
+        addBack(left, y);
+    }
+
+    /** Stonemason orders: what to cut and how far along it is; order with the block in hand. */
+    private void buildOrders(int left, int top) {
+        int y = contentTop() + 12;
+        java.util.List<String[]> rows = new ArrayList<>();
+        for (String flag : flags) {
+            if (!flag.startsWith("order:")) continue;
+            String[] parts = flag.substring("order:".length()).split("\\|", -1);
+            if (parts.length >= 5) rows.add(parts);
+        }
+        rows.sort(java.util.Comparator.comparingInt(r -> Integer.parseInt(r[0])));
+        int shown = 0;
+        for (String[] row : rows) {
+            if (shown++ >= 4) break;
+            String index = row[0];
+            boolean auto = "1".equals(row[4]);
+            String label = "   " + filterNames(row[1]) + "  " + row[2] + "/" + row[3];
+            itemIcon(row[1], left + 14, y + 2);
+            addRenderableWidget(Button.builder(Component.literal(trim(label, 30)).append(auto ? Component.translatable(Lang.ORDERS_AUTO) : Component.empty()), b -> {})
+                .tooltip(Tooltip.create(Component.translatable(Lang.ORDERS_CUT_TIP, row[2], row[3], filterNames(row[1]))))
+                .bounds(left + 12, y, 216, 20).build());
+            addRenderableWidget(Button.builder(Component.literal("✕"), b -> send("remove_order", index))
+                .bounds(left + 232, y, 32, 20).build());
+            y += 22;
+        }
+        if (rows.isEmpty()) y += 22;
+        y += 4;
+        int[] counts = {16, 64, 256};
+        for (int i = 0; i < counts.length; i++) {
+            String n = String.valueOf(counts[i]);
+            addRenderableWidget(Button.builder(Component.translatable(Lang.ORDERS_ADD, n), b -> send("add_order", n))
+                .tooltip(Tooltip.create(Component.translatable(Lang.ORDERS_ADD_TIP)))
+                .bounds(left + 12 + i * 86, y, 80, 20).build());
+        }
+        y += 24;
+        checkbox(left + 12, y, "supplybuilders", Component.translatable(Lang.ORDERS_SUPPLY_BUILDERS), "toggle_supply_builders", "");
+        y += 22;
+        addRenderableWidget(Button.builder(Component.translatable(Lang.ORDERS_CLEAR), b -> send("clear_orders", ""))
+            .bounds(left + 12, y, 122, 20).build());
+        addRenderableWidget(Button.builder(Component.translatable(Lang.D_BACK), b -> { page = Page.MAIN; rebuild(); })
+            .bounds(left + 142, y, 122, 20).build());
+    }
+
+    /** Toolsmith stock: how many spare tools of each kind to keep in the output chest. */
+    private void buildTools(int left, int top) {
+        int y = contentTop();
+        java.util.Map<String, String> targets = new java.util.HashMap<>();
+        for (String flag : flags) {
+            if (!flag.startsWith("tool:")) continue;
+            String[] parts = flag.substring("tool:".length()).split("\\|", -1);
+            if (parts.length == 2) targets.put(parts[0], parts[1]);
+        }
+        java.util.List<String> keys = ToolsmithJobs.TOOL_KEYS;
+        for (int i = 0; i < keys.size(); i++) {
+            String key = keys.get(i);
+            String n = targets.getOrDefault(key, "1");
+            String sample = switch (key) {
+                case "shears", "fishing_rod" -> "minecraft:" + key;
+                default -> "minecraft:iron_" + key;
+            };
+            int x = left + 12 + (i % 2) * 130;
+            int ty = y + (i / 2) * 22;
+            itemIcon(sample, x + 2, ty + 2);
+            addRenderableWidget(Button.builder(Component.literal("   ").append(Component.translatable(Lang.TOOLS_KEEP,
+                    Component.translatable(Lang.toolKey(key)), n)), b -> send("cycle_tool_target", key))
+                .tooltip(Tooltip.create(Component.translatable(Lang.TOOLS_TIP)))
+                .bounds(x, ty, 122, 20).build());
+        }
+        y += 3 * 22 + 6;
+        addRenderableWidget(Button.builder(Component.translatable(Lang.TOOLS_INFO), b -> {})
             .bounds(left + 12, y, 252, 20).build());
         y += 24;
         addBack(left, Math.min(y, contentBottom()));
@@ -788,6 +894,36 @@ public final class WorkerDialogueScreen extends Screen {
             addRenderableWidget(Button.builder(Component.translatable(Lang.LOC_CLEAR_FURNACES), b -> send("clear_assign", "furnace"))
                 .bounds(left + 12, y, 252, 20).build());
             y += 24;
+            y = assignRow(left, y, Component.translatable(Lang.LOC_SUPPLY), "supply", hasSupply);
+            y = assignRow(left, y, Component.translatable(Lang.LOC_OUTPUT), "output", hasOutput);
+            y = assignRow(left, y, Component.translatable(Lang.LOC_BED), "bed", hasBed);
+            addBack(left, y);
+            return;
+        }
+        if ("cook".equals(role)) {
+            y = assignRow(left, y, Component.translatable(Lang.LOC_SMOKER), "furnace", false);
+            addRenderableWidget(Button.builder(Component.translatable(Lang.LOC_CLEAR_FURNACES), b -> send("clear_assign", "furnace"))
+                .bounds(left + 12, y, 252, 20).build());
+            y += 24;
+            y = assignRow(left, y, Component.translatable(Lang.LOC_SUPPLY), "supply", hasSupply);
+            y = assignRow(left, y, Component.translatable(Lang.LOC_OUTPUT), "output", hasOutput);
+            y = assignRow(left, y, Component.translatable(Lang.LOC_TABLE), "table", hasTable);
+            y = assignRow(left, y, Component.translatable(Lang.LOC_BED), "bed", hasBed);
+            addBack(left, y);
+            return;
+        }
+        if ("stonemason".equals(role)) {
+            y = assignRow(left, y, Component.translatable(Lang.LOC_STONECUTTER), "stonecutter", flags.contains("stonecutter"));
+            y = assignRow(left, y, Component.translatable(Lang.LOC_SUPPLY), "supply", hasSupply);
+            y = assignRow(left, y, Component.translatable(Lang.LOC_OUTPUT), "output", hasOutput);
+            y = assignRow(left, y, Component.translatable(Lang.LOC_BED), "bed", hasBed);
+            addBack(left, y);
+            return;
+        }
+        if ("toolsmith".equals(role)) {
+            y = assignRow(left, y, Component.translatable(Lang.LOC_TABLE), "table", hasTable);
+            y = assignRow(left, y, Component.translatable(Lang.LOC_ANVIL), "anvil", flags.contains("anvil"));
+            y = assignRow(left, y, Component.translatable(Lang.LOC_GRINDSTONE), "grindstone", flags.contains("grindstone"));
             y = assignRow(left, y, Component.translatable(Lang.LOC_SUPPLY), "supply", hasSupply);
             y = assignRow(left, y, Component.translatable(Lang.LOC_OUTPUT), "output", hasOutput);
             y = assignRow(left, y, Component.translatable(Lang.LOC_BED), "bed", hasBed);
@@ -1101,6 +1237,9 @@ public final class WorkerDialogueScreen extends Screen {
             case "smelter" -> 0xFFFF7043;
             case "courier" -> 0xFFBA68C8;
             case "gatherer" -> 0xFF66BB6A;
+            case "toolsmith" -> 0xFF78909C;
+            case "stonemason" -> 0xFFB0A090;
+            case "cook" -> 0xFFE0A050;
             default -> 0xFFBCAAA4;
         };
     }

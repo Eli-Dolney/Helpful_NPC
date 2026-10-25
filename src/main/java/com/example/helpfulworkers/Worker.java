@@ -97,6 +97,14 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
     boolean useBoneMeal;
     boolean needsUnload;
     BlockPos first, second, bed, supply, output, craftingTable, buildOrigin;
+    /** Craft-trade workstations: toolsmith anvil/grindstone, stonemason stonecutter. */
+    BlockPos anvil, grindstone, stonecutter;
+    /** Toolsmith stock targets per tool key (see ToolsmithJobs.TOOL_KEYS); missing = 1. Saved. */
+    final java.util.Map<String, Integer> toolTargets = new java.util.LinkedHashMap<>();
+    /** Toolsmith: the workmate a tool is promised to; not saved. */
+    UUID toolDeliveryTo;
+    String toolDeliveryKey;
+    long lastDemandScan;
     /** Town hall this worker gathers at when it has no bed (recall, go home). */
     BlockPos hall;
     /** Personality: one of {@link #TRAITS}; empty until picked. Sets greeting lines and voice pitch. */
@@ -121,6 +129,23 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         boolean finished() { return done >= count; }
     }
     final List<Request> requests = new ArrayList<>();
+    /** Stonemason cutting orders: item id, wanted, cut so far, and whether a builder's blueprint asked for it. Saved. */
+    record Order(String item, int count, int done, boolean auto) {
+        boolean finished() { return done >= count; }
+    }
+    final List<Order> orders = new ArrayList<>();
+    /** Stonemason: derive orders from nearby builders' blueprints. */
+    boolean supplyBuilders;
+    long lastOrderScan;
+    /** Cook: bring food to hungry workmates; bake bread when wheat is about. Saved. */
+    boolean feedWorkers = true;
+    boolean craftMeals;
+    UUID feedTo;
+    long lastFeedScan;
+    /** Courier mode: "zone" (assigned pickup chests) or "porter" (every owned worker's output chest nearby). Saved. */
+    String courierMode = "zone";
+    final List<BlockPos> porterPickups = new ArrayList<>();
+    long lastPorterScan;
     /** Pause once every request is met; off, the worker keeps collecting past the count. */
     boolean requestsStop = true;
     static final int MAX_REQUESTS = 4;
@@ -482,6 +507,14 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             flags.add("req:" + i + "|" + r.item() + "|" + r.done() + "|" + r.count());
         }
         if (requestsStop) flags.add("reqstop");
+        for (int i = 0; i < orders.size(); i++) {
+            Order o = orders.get(i);
+            flags.add("order:" + i + "|" + o.item() + "|" + o.done() + "|" + o.count() + "|" + (o.auto() ? 1 : 0));
+        }
+        if (supplyBuilders) flags.add("supplybuilders");
+        if (feedWorkers) flags.add("feedworkers");
+        if (craftMeals) flags.add("craftmeals");
+        flags.add("courier:" + ("porter".equals(courierMode) ? "porter" : "zone"));
         if (ranchBreed) flags.add("breed");
         if (ranchShear) flags.add("shear");
         if (ranchMilk) flags.add("milk");
@@ -490,6 +523,10 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         if (culling) flags.add("culling");
         flags.add("siteprep:" + (sitePrep == null ? SitePrep.CLEAR : sitePrep));
         if (prepOnly) flags.add("flattening");
+        if (anvil != null) flags.add("anvil");
+        if (grindstone != null) flags.add("grindstone");
+        if (stonecutter != null) flags.add("stonecutter");
+        for (String key : ToolsmithJobs.TOOL_KEYS) flags.add("tool:" + key + "|" + ToolsmithJobs.target(this, key));
         flags.add("level:" + workerLevel() + "|" + xp + "|" + nextLevelXp(xp));
         if (trait != null && !trait.isEmpty()) flags.add("trait:" + trait);
         for (int i = 0; i < pickups.size(); i++) {
@@ -755,7 +792,14 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
             heal(0.5f);
         }
         if (getHealth() > getMaxHealth() * 0.5f) return;
+        // Eat the most filling thing in the bag (a cooked meal over a raw one).
+        int best = -1;
+        int bestNutrition = -1;
         for (int i = 0; i < bag.getContainerSize(); i++) {
+            FoodProperties food = bag.getItem(i).getFoodProperties(this);
+            if (food != null && food.nutrition() > bestNutrition) { best = i; bestNutrition = food.nutrition(); }
+        }
+        for (int i = (best < 0 ? bag.getContainerSize() : best); i < bag.getContainerSize(); i++) {
             ItemStack stack = bag.getItem(i);
             FoodProperties food = stack.getFoodProperties(this);
             if (food == null) continue;
@@ -961,6 +1005,19 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         tag.putBoolean("RanchBreed", ranchBreed);
         tag.putBoolean("RanchHoney", ranchHoney);
         tag.putBoolean("RequestsStop", requestsStop);
+        tag.putBoolean("SupplyBuilders", supplyBuilders);
+        tag.putBoolean("FeedWorkers", feedWorkers);
+        tag.putBoolean("CraftMeals", craftMeals);
+        tag.putString("CourierMode", courierMode == null ? "zone" : courierMode);
+        if (!orders.isEmpty()) {
+            ListTag list = new ListTag();
+            for (Order o : orders) {
+                CompoundTag e = new CompoundTag();
+                e.putString("Item", o.item()); e.putInt("Count", o.count()); e.putInt("Done", o.done()); e.putBoolean("Auto", o.auto());
+                list.add(e);
+            }
+            tag.put("Orders", list);
+        }
         if (!requests.isEmpty()) {
             ListTag board = new ListTag();
             for (Request r : requests) {
@@ -1006,6 +1063,12 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         savePos(tag, "First", first); savePos(tag, "Second", second); savePos(tag, "Bed", bed);
         savePos(tag, "Supply", supply); savePos(tag, "Output", output);
         savePos(tag, "CraftingTable", craftingTable); savePos(tag, "BuildOrigin", buildOrigin);
+        savePos(tag, "Anvil", anvil); savePos(tag, "Grindstone", grindstone); savePos(tag, "Stonecutter", stonecutter);
+        if (!toolTargets.isEmpty()) {
+            CompoundTag targets = new CompoundTag();
+            for (var e : toolTargets.entrySet()) targets.putInt(e.getKey(), e.getValue());
+            tag.put("ToolTargets", targets);
+        }
         ListTag furnaceTag = new ListTag();
         for (BlockPos p : furnaces) { CompoundTag e = new CompoundTag(); e.putLong("P", p.asLong()); furnaceTag.add(e); }
         tag.put("Furnaces", furnaceTag);
@@ -1085,6 +1148,17 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         ranchBreed = !tag.contains("RanchBreed") || tag.getBoolean("RanchBreed");
         ranchHoney = !tag.contains("RanchHoney") || tag.getBoolean("RanchHoney");
         requestsStop = !tag.contains("RequestsStop") || tag.getBoolean("RequestsStop");
+        supplyBuilders = tag.getBoolean("SupplyBuilders");
+        feedWorkers = !tag.contains("FeedWorkers") || tag.getBoolean("FeedWorkers");
+        craftMeals = tag.getBoolean("CraftMeals");
+        courierMode = "porter".equals(tag.getString("CourierMode")) ? "porter" : "zone";
+        orders.clear();
+        ListTag orderList = tag.getList("Orders", Tag.TAG_COMPOUND);
+        for (int i = 0; i < orderList.size() && orders.size() < StonemasonJobs.MAX_ORDERS; i++) {
+            CompoundTag e = orderList.getCompound(i);
+            if (e.getString("Item").isEmpty() || e.getInt("Count") <= 0) continue;
+            orders.add(new Order(e.getString("Item"), e.getInt("Count"), Math.max(0, e.getInt("Done")), e.getBoolean("Auto")));
+        }
         requests.clear();
         ListTag board = tag.getList("Requests", Tag.TAG_COMPOUND);
         for (int i = 0; i < board.size() && requests.size() < MAX_REQUESTS; i++) {
@@ -1141,6 +1215,12 @@ public final class Worker extends PathfinderMob implements RangedAttackMob {
         first = readPos(tag, "First"); second = readPos(tag, "Second"); bed = readPos(tag, "Bed");
         supply = readPos(tag, "Supply"); output = readPos(tag, "Output");
         craftingTable = readPos(tag, "CraftingTable"); buildOrigin = readPos(tag, "BuildOrigin");
+        anvil = readPos(tag, "Anvil"); grindstone = readPos(tag, "Grindstone"); stonecutter = readPos(tag, "Stonecutter");
+        toolTargets.clear();
+        if (tag.contains("ToolTargets", Tag.TAG_COMPOUND)) {
+            CompoundTag targets = tag.getCompound("ToolTargets");
+            for (String key : targets.getAllKeys()) if (ToolsmithJobs.TOOL_KEYS.contains(key)) toolTargets.put(key, targets.getInt(key));
+        }
         furnaces.clear();
         ListTag furnaceTag = tag.getList("Furnaces", Tag.TAG_COMPOUND);
         for (int i = 0; i < furnaceTag.size(); i++) furnaces.add(BlockPos.of(furnaceTag.getCompound(i).getLong("P")));

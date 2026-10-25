@@ -27,51 +27,81 @@ final class Crafting {
      * pending; callers retry next tick and find the result in the bag once it is done.
      */
     static boolean tryCraft(ServerLevel level, Worker worker, Class<?> wanted) {
-        if (worker.craftingTable == null || !level.isLoaded(worker.craftingTable)
-            || !level.getBlockState(worker.craftingTable).is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE)) return false;
+        if (!tableReady(level, worker)) return false;
         if (worker.nav.hasErrand()) return false;
-        Container supply = Jobs.supplyContainer(level, worker);
         for (String id : worker.recipes) {
             CraftingRecipe recipe = approved(level, id, wanted);
             if (recipe == null) continue;
-            ItemStack result = recipe.getResultItem(level.registryAccess());
-            List<Source> chosen = choose(recipe, worker, supply);
-            if (chosen == null || chosen.isEmpty()) continue;
-            String name = result.getHoverName().getString();
-
-            // Ingredients still in the supply chest: bring every one of them back in one trip.
-            Map<Integer, Integer> remote = new LinkedHashMap<>();
-            for (Source source : chosen) if (source.inventory == supply) remote.merge(source.slot, 1, Integer::sum);
-            if (!remote.isEmpty()) {
-                if (worker.isUnreachable(worker.supply)) { worker.setStatusKey(Lang.STATUS_CANT_REACH_SUPPLY); return false; }
-                if (!Jobs.hasRoom(worker.bag, null)) { worker.setStatusKey(Lang.STATUS_BAG_FULL_MATERIALS, StatusText.name(result)); return false; }
-                List<ItemStack> wants = new ArrayList<>();
-                for (Map.Entry<Integer, Integer> e : remote.entrySet()) wants.add(supply.getItem(e.getKey()).copyWithCount(e.getValue()));
-                String first = wants.get(0).getHoverName().getString();
-                String label = wants.size() == 1 ? first : first + " and " + (wants.size() - 1) + " more";
-                BlockPos chestPos = worker.supply;
-                worker.nav.requestErrand(chestPos, "Fetching " + label + " from supply", (lvl, w) -> {
-                    w.supplyPeek.clear();
-                    if (!(lvl.getBlockEntity(chestPos) instanceof Container chest)) { w.setStatusKey(Lang.STATUS_SUPPLY_CHEST_MISSING); return; }
-                    int moved = 0;
-                    for (ItemStack want : wants) {
-                        int grab = Math.max(want.getCount(), Math.min(Jobs.FETCH_BATCH, want.getMaxStackSize()));
-                        moved += WorkerNav.pull(w, chest, s -> ItemStack.isSameItemSameComponents(s, want), grab);
-                    }
-                    w.setStatusKey(moved > 0 ? Lang.STATUS_PICKED_UP_MATERIALS : Lang.STATUS_SUPPLY_NO_MATERIALS, StatusText.name(result));
-                });
-                return false;
-            }
-
-            // Everything is in the bag: craft at the table, walking there first if needed.
-            if (worker.nav.isWithin(worker.craftingTable, WorkerNav.CONTAINER_REACH, WorkerNav.CONTAINER_REACH_Y)) {
-                return craftNow(level, worker, recipe, result);
-            }
-            worker.nav.requestErrand(worker.craftingTable, "Walking to the crafting table for " + name,
-                (lvl, w) -> craftNow(lvl, w, recipe, result));
-            return false;
+            Result result = attempt(level, worker, recipe);
+            if (result == Result.DONE) return true;
+            if (result == Result.PENDING) return false;
         }
         return false;
+    }
+
+    /** What a crafting attempt did this tick. */
+    enum Result { DONE, PENDING, MISSING }
+
+    static boolean tableReady(ServerLevel level, Worker worker) {
+        return worker.craftingTable != null && level.isLoaded(worker.craftingTable)
+            && level.getBlockState(worker.craftingTable).is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE);
+    }
+
+    /** A vanilla crafting recipe by id, if it is one this engine can run. */
+    static CraftingRecipe recipe(ServerLevel level, String id) {
+        if (!isSupported(level, id).success()) return null;
+        ResourceLocation key = ResourceLocation.tryParse(id);
+        if (key == null) return null;
+        var holder = level.getRecipeManager().byKey(key);
+        return holder.isPresent() && holder.get().value() instanceof CraftingRecipe recipe ? recipe : null;
+    }
+
+    /**
+     * Try to craft one recipe (any supported crafting recipe, taught or not). Ingredients still in
+     * the supply chest are fetched first in one trip, then the worker walks to the table and crafts
+     * from the bag. PENDING while any of that is under way; MISSING when the bag and supply together
+     * cannot cover the ingredients (nothing is started).
+     */
+    static Result attempt(ServerLevel level, Worker worker, CraftingRecipe recipe) {
+        if (!tableReady(level, worker)) return Result.MISSING;
+        if (worker.nav.hasErrand()) return Result.PENDING;
+        Container supply = Jobs.supplyContainer(level, worker);
+        ItemStack result = recipe.getResultItem(level.registryAccess());
+        List<Source> chosen = choose(recipe, worker, supply);
+        if (chosen == null || chosen.isEmpty()) return Result.MISSING;
+        String name = result.getHoverName().getString();
+
+        // Ingredients still in the supply chest: bring every one of them back in one trip.
+        Map<Integer, Integer> remote = new LinkedHashMap<>();
+        for (Source source : chosen) if (source.inventory == supply) remote.merge(source.slot, 1, Integer::sum);
+        if (!remote.isEmpty()) {
+            if (worker.isUnreachable(worker.supply)) { worker.setStatusKey(Lang.STATUS_CANT_REACH_SUPPLY); return Result.MISSING; }
+            if (!Jobs.hasRoom(worker.bag, null)) { worker.setStatusKey(Lang.STATUS_BAG_FULL_MATERIALS, StatusText.name(result)); return Result.MISSING; }
+            List<ItemStack> wants = new ArrayList<>();
+            for (Map.Entry<Integer, Integer> e : remote.entrySet()) wants.add(supply.getItem(e.getKey()).copyWithCount(e.getValue()));
+            String first = wants.get(0).getHoverName().getString();
+            String label = wants.size() == 1 ? first : first + " and " + (wants.size() - 1) + " more";
+            BlockPos chestPos = worker.supply;
+            worker.nav.requestErrand(chestPos, "Fetching " + label + " from supply", (lvl, w) -> {
+                w.supplyPeek.clear();
+                if (!(lvl.getBlockEntity(chestPos) instanceof Container chest)) { w.setStatusKey(Lang.STATUS_SUPPLY_CHEST_MISSING); return; }
+                int moved = 0;
+                for (ItemStack want : wants) {
+                    int grab = Math.max(want.getCount(), Math.min(Jobs.FETCH_BATCH, want.getMaxStackSize()));
+                    moved += WorkerNav.pull(w, chest, s -> ItemStack.isSameItemSameComponents(s, want), grab);
+                }
+                w.setStatusKey(moved > 0 ? Lang.STATUS_PICKED_UP_MATERIALS : Lang.STATUS_SUPPLY_NO_MATERIALS, StatusText.name(result));
+            });
+            return Result.PENDING;
+        }
+
+        // Everything is in the bag: craft at the table, walking there first if needed.
+        if (worker.nav.isWithin(worker.craftingTable, WorkerNav.CONTAINER_REACH, WorkerNav.CONTAINER_REACH_Y)) {
+            return craftNow(level, worker, recipe, result) ? Result.DONE : Result.MISSING;
+        }
+        worker.nav.requestErrand(worker.craftingTable, "Walking to the crafting table for " + name,
+            (lvl, w) -> craftNow(lvl, w, recipe, result));
+        return Result.PENDING;
     }
 
     /** Consume the recipe's ingredients from the bag and collect the result; false if the bag no longer has them. */

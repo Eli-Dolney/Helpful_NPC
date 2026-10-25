@@ -45,6 +45,9 @@ final class Jobs {
             if (SiteJobs.tick(level, worker)) { worker.markWorkFound(); return; }
             if ("builder".equals(worker.role)) { Blueprints.tick(level, worker); worker.markWorkFound(); return; }
             if ("smelter".equals(worker.role)) { ExtraJobs.smelter(level, worker); return; }
+            if ("toolsmith".equals(worker.role)) { ToolsmithJobs.tick(level, worker); return; }
+            if ("stonemason".equals(worker.role)) { StonemasonJobs.tick(level, worker); return; }
+            if ("cook".equals(worker.role)) { CookJobs.tick(level, worker); return; }
             if ("courier".equals(worker.role)) {
                 if (!handleInventory(level, worker)) return;
                 ExtraJobs.courier(level, worker);

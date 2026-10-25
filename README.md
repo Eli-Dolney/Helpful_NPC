@@ -1,4 +1,4 @@
-# Helpful Workers 1.0.0
+# Helpful Workers 1.1.0
 
 Minecraft Java 1.21.1, NeoForge 21.1.235 or later 21.1.x, Java 21. Assign NPC workers to farms, forests, mines, construction and builder-placed worker sites through dialogue, reusable role kits, and a guided assignment clipboard. `/worker` commands remain as an optional fallback. No MineColonies dependency.
 
@@ -6,7 +6,7 @@ Minecraft Java 1.21.1, NeoForge 21.1.235 or later 21.1.x, Java 21. Assign NPC wo
 
 ## Install
 
-Put `helpfulworkers-1.0.0.jar` in the `mods` folder of a matching NeoForge instance and remove older Helpful Workers JARs. On a server, install it on the server and every client (the network protocol changed, so 0.5.x/0.9.x clients cannot join a 1.0.0 server). Back up worlds before updating. Worlds from 0.1–0.3, 0.5.x and 0.9.x load: registry ids and NBT keys from both lines are kept.
+Put `helpfulworkers-1.1.0.jar` in the `mods` folder of a matching NeoForge instance and remove older Helpful Workers JARs. On a server, install it on the server and every client (the network protocol changed, so 0.5.x/0.9.x clients cannot join a 1.0.0 server). Back up worlds before updating. Worlds from 0.1–0.3, 0.5.x and 0.9.x load: registry ids and NBT keys from both lines are kept.
 
 On a standard Windows launcher the mods folder is `%APPDATA%\.minecraft\mods`; launchers with instances use the instance's own `mods` folder. Put the **JAR**, not the source ZIP, in `mods`. This is a Java Edition mod; it cannot be installed on Bedrock.
 
@@ -94,6 +94,14 @@ Farmers harvest and replant vanilla crops. Foresters cut logs and replant suppor
 - **Courier routes**: pickups are visited in turn (round-robin). On *Plan my route* each pickup chest can have a filter (hold an item and click the chest row to add it; *Any* clears it) and a *Keep N* count (0/8/16/32/64 of each item stay behind). With a supply chest and furnaces assigned, the courier also carries smeltables and fuel from the supply to the furnaces, a stack at a time.
 - **Smelter**: fuel is anything with a burn time (data-driven), blast furnaces only get blasting recipes and smokers only smoking recipes, and furnaces are loaded a full stack at a time. The smelter now walks to the supply chest for smeltables and fuel instead of reaching into it from afar; what it carries for the furnaces stays in its bag until a slot frees up.
 - **Request list** (every non-combat role): hold an item, open *What do you need?* and ask for 16, 64 or 256 of it (or `/worker request <count>`). Everything the worker collects counts toward the first open request; the status line and roster show `· Request 10/64 Oak Log`. By default the worker pauses when the list is complete; untick *Pause when the list is collected* to keep going. Up to four items per worker.
+
+### Crafts and logistics (1.1.0)
+
+- **Toolsmith** (kit: paper + iron ingot + stick): assign a crafting table, an anvil and/or a grindstone, a supply chest (sticks, planks, cobblestone, iron, diamonds, repair materials) and an output chest. Each work tick, in order: carry a tool to a workmate whose status says *Missing axe* (or who holds one below 15%), repair worn tools from the bag or supply chest at the anvil (repair material, a quarter of the durability per unit) or grindstone (two of a kind become one), shelve finished tools in the output chest, forge whatever the stock is short of at the best tier the supply can pay for (diamond, iron, stone, wood), and scan owned workers within 64 blocks for demand every 10 s. Stock targets per tool (pickaxe, axe, shovel, hoe, shears, fishing rod) cycle 0/1/2/4 on the *Options* tab. Deliveries go into the workmate's supply chest, or straight into its bag when it has none.
+- **Stonemason** (kit: paper + stone bricks + cobblestone): assign a stonecutter, supply (raw stone) and output. Order on the *Options* tab with the block in hand (+16/+64/+256) or through the request list; anything a stonecutter makes counts (bricks, slabs, stairs, walls, chiseled, polished…). Inputs are fetched from supply on foot, one output is cut per work tick with the stonecutter sound, products are shelved. *Cut what nearby builders still need* derives orders from owned builders' remaining custom-blueprint materials (minus what their supply already holds) every 10 s; those orders show *(builder)* and are replaced as the build progresses.
+- **Cook** (kit: paper + bowl + coal): assign smokers or furnaces (up to 4), supply (raw food, fuel), output and optionally a crafting table. Keeps the smokers loaded with things that cook into food (ore is never touched, even in a plain furnace), shelves cooked food beyond a reserve of 16, and once a minute brings up to 8 cooked meals to an owned worker within 64 blocks whose bag holds fewer than 4 food items. *Bake bread when there is wheat* keeps 16 bread on the shelf. Every worker now eats the most filling food in its bag first.
+- **Courier porter mode** (`/worker mode porter` or the mode button on *Plan my route*): instead of assigned pickups, the courier treats every owned worker's output chest within 96 blocks as a pickup (rescanned each minute) and hauls everything to its own drop-off chest. Filters and keep-N still apply per chest when set. `/worker mode zone` switches back.
+- Warehouses restock the new trades too (toolsmith: sticks, iron, cobble, string; stonemason: cobble, stone, deepslate; cook: coal, wheat).
 
 ### Builder ground prep
 
@@ -251,6 +259,7 @@ Commands target your nearest owned worker within 12 blocks and use the same vali
 | `/worker clear area\|bed\|supply\|output\|table\|origin` | Clear an assignment |
 | `/worker recipe <id>` / `/worker recipe remove <id>` | Approve or remove a crafting recipe |
 | `/worker mode excavate\|branches\|terraform\|quarry\|staircase\|strip\|colony` | Miner pattern (terraform and quarry use `/worker depth`) |
+| `/worker mode zone\|porter` | Courier: assigned pickup chests, or every owned worker's output chest nearby |
 | `/worker depth <n\|-1>` | Dig depth for terraform/quarry (-1 = bedrock) |
 | `/worker start\|pause\|home\|status` | Control or inspect |
 | `/worker blueprint capture\|list\|load\|place\|preview\|materials` | Builder controls |
@@ -302,7 +311,7 @@ To launch a development client or server:
 
 The first server launch may require accepting Minecraft's EULA in the generated server run directory before starting again. Use a separate test world.
 
-On macOS/Linux, use `./gradlew build`, `./gradlew runClient`, or `./gradlew runServer` instead. The first build downloads dependencies and requires internet access. The built mod appears at `build/libs/helpfulworkers-1.0.0.jar`.
+On macOS/Linux, use `./gradlew build`, `./gradlew runClient`, or `./gradlew runServer` instead. The first build downloads dependencies and requires internet access. The built mod appears at `build/libs/helpfulworkers-1.1.0.jar`.
 
 ### Bring changes between computers
 
@@ -313,6 +322,8 @@ A fresh GitHub clone contains only changes that have been pushed to that reposit
 ## Roadmap and changelog
 
 The development roadmap lives in `ROADMAP.md`; test results per release are in `VERIFICATION.md`.
+
+**1.1.0 — crafts and logistics.** Three trades and a delivery mode: the **toolsmith** forges the best tier the supply can pay for, repairs worn tools at an anvil or grindstone, keeps per-tool stock targets and carries tools to workmates who report *Missing …*; the **stonemason** cuts orders at a stonecutter (hold the block, +16/+64/+256) and can derive orders from nearby builders' blueprints; the **cook** keeps smokers loaded with food, bakes bread and feeds hungry workmates; couriers get **porter mode** (collect from every owned worker's output chest). Requests placed on a stonemason become cutting orders. Workers eat the most filling food first. Crafting can now run any supported vanilla recipe, not only taught ones. Warehouse restock defaults cover the new roles.
 
 **1.0.0 — one mod.** The worker-sites line (0.5.x) and the living-workers line (0.4–0.9) are merged. Sites, site cores, custom site templates, warehouses with supply delivery, managed trees and ore nodes, ownership markers, names and skins all come back, reachable from the 0.9 tabbed dialogue (*Worker sites*, *Name & look*, *Build a worker site…*). Site workers use the site router (visible stand spots, automatic retry); zone workers keep real movement with on-foot errands. Drop-offs use one shared export rule: tools, role supplies and recipe ingredients stay, `/worker keep` reserves win. Work areas can be up to 512 × 512 columns and 64M blocks with budgeted heightmap scans (300 × 300 forests, mountain terraforming, pits to bedrock). Saved blueprints scroll instead of showing three; non-miners no longer see "dig site" buttons; the `[sites]` config entries have labels. Game-test harness: a watchdog re-forces chunks for tests that would otherwise never start.
 
@@ -342,4 +353,4 @@ Use Java 21. The JAR appears under `build/libs/`. First builds need network acce
 
 ## Limits
 
-Recipe teaching supports ordinary shaped/shapeless crafting-table recipes without crafting remainders. Blueprint capture is capped at 4,096 blocks and site templates at 64 × 32 × 64 with unsupported-block checks. Material counts are total blueprint requirements. Navigation, hazards, multiplayer edge cases, and large worker counts still need survival playtesting.
+Recipe teaching supports ordinary shaped/shapeless crafting-table recipes without crafting remainders. The toolsmith does not use the smithing table (no netherite upgrades) and the stonemason has no quarry of its own yet; the cook uses smokers and furnaces, not campfires. Blueprint capture is capped at 4,096 blocks and site templates at 64 × 32 × 64 with unsupported-block checks. Material counts are total blueprint requirements. Navigation, hazards, multiplayer edge cases, and large worker counts still need survival playtesting.

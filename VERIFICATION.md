@@ -1,4 +1,4 @@
-# Verification report — Helpful Workers 1.0.0
+# Verification report — Helpful Workers 1.1.0
 
 ## Automated / performed here
 
@@ -6,6 +6,12 @@
 - JAR: `build/libs/helpfulworkers-0.2.0.jar`
 - Dedicated `runServer` smoke: mod listed as **Helpful Workers 0.2.0**, recipes loaded, server reached **Done**, no `ClientHooks` / `NoClassDefFoundError` during startup.
 - Game-test source is present in `WorkerGameTests.java` (ownership, kits, clipboard cancel, cross-worker menu isolation, unsupported recipes, 0.1-style NBT). These were not executed in a game-test server run in this session.
+
+## 1.1.0 (crafts and logistics) — performed 2026-10-25
+
+- `./gradlew build runGameTestServer`: build succeeded, JAR `build/libs/helpfulworkers-1.1.0.jar`; **all 90 required game tests passed** (82 from 1.0.0 plus 8 new).
+- New tests: `toolsmithCraftsBestTier`, `toolsmithRepairsAtAnvil`, `toolsmithDeliversToMissingWorker`, `stonemasonCutsOrder`, `stonemasonWaitsForInput`, `stonemasonDerivesOrdersFromBuilder`, `cookSmokesAndFeeds`, `porterCollectsFromOwnedOutputs`; `langKeysExist` covers the three new roles' keys.
+- Not played in a client: the three kit textures, role icons and outfits; the Options pages (tool stock, orders, kitchen); a toolsmith walking a tool to a worker 40 blocks away; porter mode over a real base; GUI scale checks for the new pages.
 
 ## 1.0.0 (merge of 0.5.3 worker sites into 0.9.0) — performed 2026-10-18
 

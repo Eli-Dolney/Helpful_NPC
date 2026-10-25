@@ -65,6 +65,12 @@ public final class HelpfulWorkers {
         () -> new RoleKitItem(new Item.Properties().stacksTo(1), "courier"));
     public static final DeferredItem<Item> GATHERER_KIT = ITEMS.register("gatherers_kit",
         () -> new RoleKitItem(new Item.Properties().stacksTo(1), "gatherer"));
+    public static final DeferredItem<Item> TOOLSMITH_KIT = ITEMS.register("toolsmiths_kit",
+        () -> new RoleKitItem(new Item.Properties().stacksTo(1), "toolsmith"));
+    public static final DeferredItem<Item> STONEMASON_KIT = ITEMS.register("stonemasons_kit",
+        () -> new RoleKitItem(new Item.Properties().stacksTo(1), "stonemason"));
+    public static final DeferredItem<Item> COOK_KIT = ITEMS.register("cooks_kit",
+        () -> new RoleKitItem(new Item.Properties().stacksTo(1), "cook"));
     public static final DeferredItem<net.minecraft.world.item.BlockItem> TOWN_HALL_ITEM = ITEMS.registerSimpleBlockItem(TOWN_HALL);
     public static final DeferredItem<Item> CLIPBOARD = ITEMS.register("assignment_clipboard",
         () -> new AssignmentClipboardItem(new Item.Properties().stacksTo(1)));
@@ -88,6 +94,9 @@ public final class HelpfulWorkers {
                 output.accept(SMELTER_KIT.get());
                 output.accept(COURIER_KIT.get());
                 output.accept(GATHERER_KIT.get());
+                output.accept(TOOLSMITH_KIT.get());
+                output.accept(STONEMASON_KIT.get());
+                output.accept(COOK_KIT.get());
                 output.accept(CLIPBOARD.get());
                 output.accept(TOWN_HALL_ITEM.get());
                 SiteBlocks.CORES.values().forEach(item -> output.accept(item.get()));

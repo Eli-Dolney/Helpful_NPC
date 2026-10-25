@@ -38,6 +38,7 @@ final class WorkerCommands {
                 StringArgumentType.getString(ctx, "role"), true))))));
         root.then(Commands.literal("mode").then(Commands.argument("mode", StringArgumentType.word()).suggests((ctx,builder) -> {
             for (String mode : WorkerActions.MINE_MODES) builder.suggest(mode);
+            builder.suggest("zone").suggest("porter");
             return builder.buildFuture();
         }).executes(ctx -> withWorker(ctx.getSource().getPlayer(), w ->
             msg(ctx.getSource().getPlayer(), WorkerActions.setMode(ctx.getSource().getPlayer(), w,

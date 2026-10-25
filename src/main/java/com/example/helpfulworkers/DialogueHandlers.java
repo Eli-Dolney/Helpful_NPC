@@ -90,6 +90,19 @@ final class DialogueHandlers {
                 if (menu != null) yield menu;
                 yield WorkerActions.toggleRequestStop(player, worker);
             }
+            case "cycle_tool_target" -> WorkerActions.cycleToolTarget(player, worker, arg);
+            case "add_order" -> {
+                ActionResult menu = WorkerActions.requireMenu(player, worker);
+                if (menu != null) yield menu;
+                int count;
+                try { count = Integer.parseInt(arg.trim()); }
+                catch (NumberFormatException ex) { yield ActionResult.fail("Invalid count"); }
+                yield WorkerActions.addOrder(player, worker, player.getMainHandItem(), count);
+            }
+            case "remove_order" -> WorkerActions.removeOrder(player, worker, arg);
+            case "clear_orders" -> WorkerActions.clearOrders(player, worker);
+            case "toggle_supply_builders" -> WorkerActions.toggleSupplyBuilders(player, worker);
+            case "toggle_cook_flag" -> WorkerActions.toggleCookFlag(player, worker, arg);
             case "toggle_pickup_filter" -> WorkerActions.togglePickupFilter(player, worker, arg, player.getMainHandItem());
             case "clear_pickup_filter" -> WorkerActions.clearPickupFilter(player, worker, arg);
             case "cycle_pickup_keep" -> WorkerActions.cyclePickupKeep(player, worker, arg);
@@ -220,6 +233,9 @@ final class DialogueHandlers {
             case "origin" -> WorkerSessions.ClipboardKind.BUILD_ORIGIN;
             case "furnace" -> WorkerSessions.ClipboardKind.FURNACE;
             case "pickup" -> WorkerSessions.ClipboardKind.PICKUP;
+            case "anvil" -> WorkerSessions.ClipboardKind.ANVIL;
+            case "grindstone" -> WorkerSessions.ClipboardKind.GRINDSTONE;
+            case "stonecutter" -> WorkerSessions.ClipboardKind.STONECUTTER;
             default -> null;
         };
         if (clipboardKind == null) return ActionResult.fail("Unknown assignment");
@@ -265,6 +281,7 @@ final class DialogueHandlers {
             case "origin" -> WorkerActions.clearOrigin(player, worker);
             case "furnace" -> WorkerActions.clearFurnaces(player, worker);
             case "pickup" -> WorkerActions.clearPickups(player, worker);
+            case "anvil", "grindstone", "stonecutter" -> WorkerActions.clearWorkstation(player, worker, kind);
             default -> ActionResult.fail("Unknown clear target");
         };
     }

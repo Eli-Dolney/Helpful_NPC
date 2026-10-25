@@ -126,3 +126,103 @@ GitHub `main` (0.5.3, worker sites) and this line (0.4–0.9) split after 0.3.1;
 ## Suggested first session after approval
 
 Phase 1 in full (half a day of work), then Phase 2 items 1–2 (navigation setup, supply-chest proximity) since they change the feel the most for the least risk.
+
+
+---
+
+## Phase 7 — Crafts and logistics (1.1.0): stonemason, toolsmith, cook, porters — shipped 2026-10-25 (Phases A–D; skipped: stonemason quarry fallback, campfire cooking, warehouse tag edits, cross-worker request routing beyond the stonemason's own Needs tab)
+
+Planned 2026-10-25 after the 1.0.0 merge.
+
+### Context
+
+The 1.0.0 merge branch (`origin/merge-sites-0.9`, GitHub `Eli-Dolney/Helpful_NPC`) already has more logistics than the question assumed:
+
+- **Warehouse** site (25×21×7, 32 double chests) with sorted / incoming / overflow storage records, six item categories from tags, `WarehouseJobs` (sorting, collecting from worker and site outputs) and `WarehouseSupplies` (auto-links workers and restocks their supply chests to per-item targets, including one spare tool per role).
+- **Couriers** with up to 6 pickups, per-pickup item filters, keep-N, round-robin, furnace runs, and a warehouse mode.
+- **Requests** ("collect N of X") filled by any gathering role; **Town Hall** for recruiting, roster and a gathering point.
+- **Crafting** (`Crafting.java`) runs shaped/shapeless recipes at a crafting table, but only when `Jobs.tool` needs a tool; nothing uses a stonecutter, smithing table, anvil or grindstone, and nothing repairs tools.
+
+So the real gaps are the **craft trades** and the glue around them: a stonemason who turns stone into building materials, a toolsmith who crafts and repairs tools for everyone, a cook who keeps workers fed, and a "collect from all my workers" porter mode for players who do not build the big warehouse. The user tests tonight on the 1.0.0 branch, so step 0 is to get that build in hand; the trades follow as 1.1.0, each shippable on its own.
+
+Every role follows the existing kit pattern (copy courier): kit item in `HelpfulWorkers`, `WorkerActions.ROLES/kitForRole/roleForKit/roleLabel`, `RoleKitItem` mapping, item model + texture, `role_<role>.png`, optional `outfit_<role>.png`, shapeless recipe json (paper + 2 items), lang keys (`item.*`, `role.*`, `kit.*.desc`, `dialogue.ask.*`, `line.*.1-3`), `Jobs.tick` dispatch, `StorageOps.exportable` role supplies, `WarehouseSupplies.defaults`, `WorkerDialogueScreen.roleColor/optionsPage/buildTabs`, `SiteCatalog.roles` if the role gets a site. New workstation assignments reuse `WorkerSessions.ClipboardKind` + `start_assign`/`clear_assign` + `WorkerActions.setX` (same validation as `setTable`/`addFurnace`).
+
+---
+
+### Step 0 — tonight's build (no code)
+
+1. `git fetch`, `git checkout -b merge-sites-0.9 origin/merge-sites-0.9` in this checkout.
+2. Build with the toolchain JDK (`JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home`): `./gradlew build runGameTestServer`; confirm `build/libs/helpfulworkers-1.0.0.jar` and the test count.
+3. Hand over a short play-test checklist (recruit at Town Hall, each role once, request board, warehouse restock, courier filters, a mine plan reload). Findings from tonight feed back into the phases below before they start.
+
+---
+
+### Phase A — Toolsmith (1.1.0)
+
+**Kit:** paper + iron ingot + stick. **Workstations:** crafting table (existing `craftingTable`), new `anvil` and `grindstone` positions (`ClipboardKind.ANVIL`, `GRINDSTONE`; one each). **Chests:** supply (materials), output (finished tools).
+
+**Job loop** (`ToolsmithJobs.tick`, dispatched from `Jobs.tick`), one action per work tick, every step walked with `WorkerNav` errands and animated with `WorkAnimator`-style swings and anvil/grindstone sounds:
+
+1. **Repair first.** Scan the bag and output chest for damaged tools (durability < 30%). At the grindstone: merge two of the same damaged tool (vanilla `GrindstoneMenu` maths, drop enchantments). At the anvil: repair with the tool's repair material (`Item.isValidRepairItem`), 25% per unit, up to the vanilla cost cap; costs no XP (NPC). Sets status "Repairing Iron Pickaxe".
+2. **Fill stock.** Per-tool stock targets (default 1 each of pickaxe, axe, shovel, hoe, shears, fishing rod; editable on a new `TOOLS` dialogue page cycling 0/1/2/4) against what is in the output chest. Craft the **best tier the supply holds** (netherite > diamond > iron > stone > wood) using `Crafting.craftNow` with the vanilla tool recipe looked up from the recipe manager (shaped, no remainder, already supported); the toolsmith needs no taught recipes.
+3. **Serve demand.** Every 10 s poll owned workers within 64 blocks (and warehouse-linked ones) whose status starts with "Missing <tool>" or whose held tool is < 15%: queue a delivery. Walk to that worker's supply chest and insert the tool (or hand it over directly when within 3 blocks: `worker.collect`), status "Bringing axe to Bob". With a warehouse present, `WarehouseSupplies.defaults` tool targets rise to 2 and the warehouse courier handles distribution instead.
+4. **Collect worn tools.** Other roles' `Jobs.tool` swaps broken-but-not-destroyed tools into the bag; `StorageOps.exportable` learns to export tools under 15% when a toolsmith is linked, so they flow to the toolsmith's pickups via couriers.
+
+**Files:** new `ToolsmithJobs.java`; `Crafting.java` (public `craftRecipe(level, worker, RecipeHolder)` and `findToolRecipe(Class, tier)`); `WorkerActions` (setAnvil/setGrindstone/clearX, stock targets, `toolsmithTargets` on `Worker` saved as a compound); `WorkerSessions.ClipboardKind`; `AssignmentClipboardItem.validateTarget`; `DialogueHandlers` (`set_tool_target`, `start_assign anvil|grindstone`); `WorkerDialogueScreen` (TOOLS page, Where rows); `StorageOps.exportable`; `WarehouseSupplies.defaults`.
+
+**Tests:** `toolsmithRepairsAtAnvil` (damaged iron pickaxe + iron ingot in supply → full durability in output), `toolsmithCraftsBestTier` (supply has sticks + iron → iron axe appears in output, not stone), `toolsmithDeliversToMissingWorker` (forester with status "Missing axe" and a supply chest gets an axe).
+
+---
+
+### Phase B — Stonemason (1.1.0)
+
+**Kit:** paper + stone bricks + cobblestone. **Workstation:** stonecutter (`ClipboardKind.STONECUTTER`). **Chests:** supply (raw stone), output (products). Optional area: a quarry footprint.
+
+**Job loop** (`StonemasonJobs.tick`):
+
+1. **Orders.** A per-worker order list (`Worker.Order(item, count)`, max 8, saved like `Requests`) set on a new `ORDERS` dialogue page: pick an output item from the stonecutter recipes available for inputs the supply holds (`RecipeManager.getRecipesFor(RecipeType.STONECUTTING, SingleRecipeInput, level)`), choose 16/64/∞. A **"Supply my builders"** toggle derives orders automatically from linked builders' remaining blueprint materials (`Blueprints.materials` map minus what their supply holds), filtered to items a stonecutter can make.
+2. **Cut.** Fetch the input stack from supply on foot, walk to the stonecutter, cut one output per work tick with a swing and `BLOCK_STONE_BREAK`-style hit sound, until the order count is met or inputs run out ("Need cobblestone for stairs"). Products go to the bag, then `depositPublic` to output.
+3. **Quarry (optional).** If a work area is set and supply lacks stone, run the miner's quarry mode on it (`Jobs` quarry path reused by role check) to refill, then return to cutting. Also smelts cobble → stone / stone bricks via a linked smelter when an order needs it (adds the input to the smelter's `fetchForFurnaces` wish list through the warehouse request path; no new furnace logic).
+
+**Files:** new `StonemasonJobs.java`; `Worker` (orders list + NBT `Orders`, `supplyBuilders` flag); `WorkerActions` (setStonecutter, add/remove order, toggle); `DialogueHandlers` (`add_order`, `remove_order`, `toggle_supply_builders`, `start_assign stonecutter`); `WorkerDialogueScreen` (ORDERS page with recipe output icons, reusing the REQUESTS page widgets); `Jobs.tick` dispatch with quarry fallback.
+
+**Tests:** `stonemasonCutsOrder` (64 cobblestone in supply, order 8 cobblestone stairs → 8 stairs in output, inputs consumed at the vanilla ratio), `stonemasonDerivesOrdersFromBuilder` (builder with a stone-brick blueprint linked → an order for stone bricks appears), `stonemasonWaitsForInput` (empty supply → status "Need …", no crash).
+
+---
+
+### Phase C — Cook and feeding (1.1.0)
+
+**Kit:** paper + bowl + coal. **Workstations:** smoker and/or campfire (reuse `furnaces` list; `cookingType` already routes smoking recipes to smokers; add campfire cooking for up to 4 items at once). **Chests:** supply (raw food, fuel), output (meals).
+
+**Loop:** keep smokers loaded from supply (reuse `ExtraJobs.smelter` with a food-only filter), pull cooked food, then **feed**: every 60 s visit owned workers within 64 blocks whose bag holds fewer than 4 food items and top them up to 8 (workers already eat from the bag in `Worker.tryEatAndHeal`). Cooked food is preferred over raw in `tryEatAndHeal` (sort by nutrition). Optional `craft meals` toggle: bread, mushroom stew, rabbit stew via `Crafting.craftNow` when ingredients are in supply.
+
+**Files:** `ExtraJobs.cook` (delegating to the smelter loop with a predicate), `Worker.tryEatAndHeal` ordering, `WorkerActions`, dialogue Options page for the cook (feed toggle, meals toggle).
+
+**Tests:** `cookSmokesAndFeeds` (raw beef + coal in supply, a hungry forester nearby → steak in the forester's bag).
+
+---
+
+### Phase D — Porters and small delivery gaps (1.1.0)
+
+Most delivery already exists; this fills what players without a warehouse miss.
+
+1. **Courier "Collect from my workers" mode** (`courierMode = zone | porter | warehouse`): a porter treats every owned worker's output chest within 96 blocks as a pickup (auto-discovered, refreshed every 60 s, respecting filters/keep-N defaults) and delivers to its own output; with the Town Hall set as `hall`, a chest adjacent to the hall is the default drop-off. Toggle on the ROUTES page; command `/worker mode porter`.
+2. **Deliveries of crafted goods.** Toolsmith, stonemason and cook outputs are categorised (`tools`, `building`, `food` tags under `data/helpfulworkers/tags/item/warehouse/`) so the warehouse sorts them and `WarehouseSupplies` restocks builders with stone products and everyone with tools and food. Defaults in `WarehouseSupplies.defaults` per role.
+3. **Request routing.** When a request names an item a stonemason or toolsmith can make, the request board offers "Order from <worker>" instead of "collect", creating the order on that worker. Shown on the REQUESTS page.
+4. **Overview.** Roster entries show the current order/stock line for craft trades (reuses `requestSuffix` on status).
+
+**Tests:** `porterCollectsFromOwnedOutputs` (two workers' output chests with loot → porter empties them into its output), `warehouseRestocksStoneForBuilder` (warehouse sorted chest with stone bricks, linked builder's supply target → delivered).
+
+---
+
+### Phase E — Trader and the rest (1.2.0, later)
+
+Trader role (sells surplus to nearby villagers for emeralds using vanilla `MerchantOffers`, buys requested items), composter for farmers (seeds → bone meal), sawmill-style forester planks/sticks pre-cut for builders, apiary polish. Only after A–D are played in a world.
+
+---
+
+### Verification (every phase)
+
+- `./gradlew build runGameTestServer` with the toolchain `JAVA_HOME`; all tests pass (87 on the 1.0.0 branch today), new tests named above added to `WorkerGameTests.java` following `courierFiltersKeepsAndRotates` / `smelterFetchesOnFootAndLoadsAStack`; `langKeysExist` covers the new keys through `Lang.all()`.
+- Version bump in `build.gradle` and `neoforge.mods.toml`; README changelog + command table + Limits; VERIFICATION.md and ROADMAP.md updated; commit on the branch and push (the repo is now git).
+- Play check in `runClient` per trade: assign the workstation with the clipboard, watch one full cycle (fetch → work → deposit), confirm the overhead status and the delivery to another worker.

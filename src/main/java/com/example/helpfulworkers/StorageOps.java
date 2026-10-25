@@ -87,6 +87,13 @@ final class StorageOps {
                 if(keep!=null && keep>0)return Math.min(s.getCount(),Math.max(0,total(w,item)-keep));
             }
         }
+        // Craft trades: finished goods leave, materials and worn tools stay (see each job class).
+        if ("toolsmith".equals(w.role)) {
+            if (ToolsmithJobs.isTool(s)) return ToolsmithJobs.exportable(w, s);
+            return 0;
+        }
+        if ("stonemason".equals(w.role) && w.level() instanceof ServerLevel sl) return StonemasonJobs.exportable(sl, w, s);
+        if ("cook".equals(w.role) && w.level() instanceof ServerLevel sl) return CookJobs.exportable(sl, w, s);
         if (item instanceof TieredItem
                 || item instanceof ArmorItem
                 || item instanceof BowItem

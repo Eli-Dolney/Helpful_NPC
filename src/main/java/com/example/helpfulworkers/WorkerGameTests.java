@@ -1060,6 +1060,274 @@ public final class WorkerGameTests {
         return n;
     }
 
+    /** Toolsmith: short of a pickaxe, forges the best tier the supply can pay for (iron, not stone) and shelves it. */
+    @GameTest(template = "empty", timeoutTicks = 400)
+    public static void toolsmithCraftsBestTier(GameTestHelper helper) {
+        walledFloor(helper);
+        helper.setBlock(new BlockPos(2, 2, 3), Blocks.BARREL);
+        helper.setBlock(new BlockPos(4, 2, 3), Blocks.CRAFTING_TABLE);
+        helper.setBlock(new BlockPos(3, 2, 4), Blocks.BARREL);
+        net.minecraft.world.Container supply = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(2, 2, 3));
+        net.minecraft.world.Container out = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(3, 2, 4));
+        supply.setItem(0, new ItemStack(Items.STICK, 8));
+        supply.setItem(1, new ItemStack(Items.IRON_INGOT, 9));
+        supply.setItem(2, new ItemStack(Items.COBBLESTONE, 9));
+        Worker worker = spawnWorker(helper, new BlockPos(3, 2, 2));
+        worker.role = "toolsmith";
+        worker.working = true;
+        worker.supply = helper.absolutePos(new BlockPos(2, 2, 3));
+        worker.craftingTable = helper.absolutePos(new BlockPos(4, 2, 3));
+        worker.output = helper.absolutePos(new BlockPos(3, 2, 4));
+        for (String key : ToolsmithJobs.TOOL_KEYS) worker.toolTargets.put(key, 0);
+        worker.toolTargets.put("pickaxe", 1);
+        for (int i = 0; i < 12 && count(out, Items.IRON_PICKAXE) == 0; i++) Jobs.tick(helper.getLevel(), worker);
+        helper.assertTrue(count(out, Items.IRON_PICKAXE) == 1, "Iron pickaxe forged and shelved: " + worker.status);
+        helper.assertTrue(count(out, Items.STONE_PICKAXE) == 0 && bagCount(worker, Items.STONE_PICKAXE) == 0, "No stone pickaxe when iron is available");
+        helper.assertTrue(count(supply, Items.IRON_INGOT) + bagCount(worker, Items.IRON_INGOT) == 6,
+            "Three ingots used (rest moved to the workshop bag)");
+        helper.assertTrue(count(supply, Items.COBBLESTONE) == 9, "Cobblestone untouched");
+        Jobs.tick(helper.getLevel(), worker);
+        helper.assertTrue(worker.status.startsWith("Workshop stocked"), "Stock target met: " + worker.status);
+        helper.succeed();
+    }
+
+    /** Toolsmith: a worn pickaxe left in the supply chest is fetched, repaired at the anvil with iron, and shelved as good as new. */
+    @GameTest(template = "empty", timeoutTicks = 400)
+    public static void toolsmithRepairsAtAnvil(GameTestHelper helper) {
+        walledFloor(helper);
+        helper.setBlock(new BlockPos(2, 2, 3), Blocks.BARREL);
+        helper.setBlock(new BlockPos(4, 2, 3), Blocks.ANVIL);
+        helper.setBlock(new BlockPos(3, 2, 4), Blocks.BARREL);
+        net.minecraft.world.Container supply = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(2, 2, 3));
+        net.minecraft.world.Container out = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(3, 2, 4));
+        ItemStack worn = new ItemStack(Items.IRON_PICKAXE);
+        worn.setDamageValue(worn.getMaxDamage() - 10);
+        supply.setItem(0, worn);
+        supply.setItem(1, new ItemStack(Items.IRON_INGOT, 6));
+        Worker worker = spawnWorker(helper, new BlockPos(3, 2, 2));
+        worker.role = "toolsmith";
+        worker.working = true;
+        worker.supply = helper.absolutePos(new BlockPos(2, 2, 3));
+        worker.anvil = helper.absolutePos(new BlockPos(4, 2, 3));
+        worker.output = helper.absolutePos(new BlockPos(3, 2, 4));
+        for (String key : ToolsmithJobs.TOOL_KEYS) worker.toolTargets.put(key, 0);
+        ItemStack repaired = ItemStack.EMPTY;
+        for (int i = 0; i < 14 && repaired.isEmpty(); i++) {
+            Jobs.tick(helper.getLevel(), worker);
+            for (int j = 0; j < out.getContainerSize(); j++) if (out.getItem(j).is(Items.IRON_PICKAXE)) repaired = out.getItem(j);
+        }
+        helper.assertFalse(repaired.isEmpty(), "Repaired pickaxe shelved in the output chest: " + worker.status);
+        helper.assertTrue(repaired.getDamageValue() == 0, "Fully repaired (damage " + repaired.getDamageValue() + ")");
+        helper.assertTrue(count(supply, Items.IRON_INGOT) == 2, "Four ingots spent on four quarters: " + count(supply, Items.IRON_INGOT));
+        helper.succeed();
+    }
+
+    /** Toolsmith: a forester reporting "Missing axe" gets one carried from the shelf to its supply chest. */
+    @GameTest(template = "empty", timeoutTicks = 400)
+    public static void toolsmithDeliversToMissingWorker(GameTestHelper helper) {
+        walledFloor(helper);
+        helper.setBlock(new BlockPos(2, 2, 3), Blocks.BARREL);
+        helper.setBlock(new BlockPos(3, 2, 4), Blocks.BARREL);
+        helper.setBlock(new BlockPos(4, 2, 2), Blocks.BARREL); // within reach: these ticks run without walking
+        net.minecraft.world.Container out = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(3, 2, 4));
+        net.minecraft.world.Container mateSupply = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(4, 2, 2));
+        out.setItem(0, new ItemStack(Items.IRON_AXE));
+        UUID owner = UUID.randomUUID();
+        Worker smith = spawnWorker(helper, new BlockPos(3, 2, 2));
+        smith.setOwner(owner);
+        smith.role = "toolsmith";
+        smith.working = true;
+        smith.supply = helper.absolutePos(new BlockPos(2, 2, 3));
+        smith.craftingTable = null;
+        smith.anvil = helper.absolutePos(new BlockPos(2, 2, 3)); // workshop present; anvil block not needed for this test
+        smith.output = helper.absolutePos(new BlockPos(3, 2, 4));
+        for (String key : ToolsmithJobs.TOOL_KEYS) smith.toolTargets.put(key, 0);
+        Worker mate = spawnWorker(helper, new BlockPos(5, 2, 3));
+        mate.setOwner(owner);
+        mate.role = "forester";
+        mate.supply = helper.absolutePos(new BlockPos(4, 2, 2));
+        mate.setStatus("Missing axe");
+        helper.assertValueEqual(ToolsmithJobs.neededTool(mate), "axe", "needed tool parsed from status");
+        for (int i = 0; i < 12 && count(mateSupply, Items.IRON_AXE) == 0; i++) Jobs.tick(helper.getLevel(), smith);
+        helper.assertTrue(count(mateSupply, Items.IRON_AXE) == 1, "Axe delivered to the forester's supply chest: " + smith.status);
+        helper.assertTrue(count(out, Items.IRON_AXE) == 0, "Axe came off the shelf");
+        helper.assertTrue(smith.toolDeliveryTo == null, "Delivery closed");
+        helper.succeed();
+    }
+
+    /** Stonemason: an order for 8 cobblestone stairs is cut one per tick from supply cobble and shelved. */
+    @GameTest(template = "empty", timeoutTicks = 400)
+    public static void stonemasonCutsOrder(GameTestHelper helper) {
+        walledFloor(helper);
+        helper.setBlock(new BlockPos(2, 2, 3), Blocks.BARREL);
+        helper.setBlock(new BlockPos(4, 2, 3), Blocks.STONECUTTER);
+        helper.setBlock(new BlockPos(3, 2, 4), Blocks.BARREL);
+        net.minecraft.world.Container supply = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(2, 2, 3));
+        net.minecraft.world.Container out = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(3, 2, 4));
+        supply.setItem(0, new ItemStack(Items.COBBLESTONE, 64));
+        Worker worker = spawnWorker(helper, new BlockPos(3, 2, 2));
+        worker.role = "stonemason";
+        worker.working = true;
+        worker.supply = helper.absolutePos(new BlockPos(2, 2, 3));
+        worker.stonecutter = helper.absolutePos(new BlockPos(4, 2, 3));
+        worker.output = helper.absolutePos(new BlockPos(3, 2, 4));
+        helper.assertTrue(StonemasonJobs.canCut(helper.getLevel(), new ItemStack(Items.COBBLESTONE_STAIRS)), "Stairs are a stonecutter product");
+        helper.assertFalse(StonemasonJobs.canCut(helper.getLevel(), new ItemStack(Items.DIRT)), "Dirt is not");
+        worker.orders.add(new Worker.Order("minecraft:cobblestone_stairs", 8, 0, false));
+        Jobs.tick(helper.getLevel(), worker);
+        helper.assertTrue(worker.nav.hasErrand(), "Walks to the supply chest for cobblestone first: " + worker.status);
+        int afterFirstCut = -1;
+        for (int i = 0; i < 30 && count(out, Items.COBBLESTONE_STAIRS) < 8; i++) {
+            Jobs.tick(helper.getLevel(), worker);
+            if (afterFirstCut < 0 && bagCount(worker, Items.COBBLESTONE_STAIRS) > 0) afterFirstCut = bagCount(worker, Items.COBBLESTONE_STAIRS);
+        }
+        helper.assertTrue(afterFirstCut == 1, "One stair per work tick, not a batch (saw " + afterFirstCut + ")");
+        helper.assertTrue(count(out, Items.COBBLESTONE_STAIRS) == 8, "Eight stairs shelved: " + worker.status);
+        helper.assertTrue(count(supply, Items.COBBLESTONE) + bagCount(worker, Items.COBBLESTONE) == 56, "Eight cobblestone used");
+        helper.assertTrue(worker.orders.get(0).finished(), "Order marked done");
+        Jobs.tick(helper.getLevel(), worker);
+        helper.assertTrue(worker.status.startsWith("All orders cut"), "Idle once the order is met: " + worker.status);
+        helper.succeed();
+    }
+
+    /** Stonemason: with nothing to cut from, reports the missing input instead of failing. */
+    @GameTest(template = "empty")
+    public static void stonemasonWaitsForInput(GameTestHelper helper) {
+        walledFloor(helper);
+        helper.setBlock(new BlockPos(2, 2, 3), Blocks.BARREL);
+        helper.setBlock(new BlockPos(4, 2, 3), Blocks.STONECUTTER);
+        Worker worker = spawnWorker(helper, new BlockPos(3, 2, 2));
+        worker.role = "stonemason";
+        worker.working = true;
+        worker.supply = helper.absolutePos(new BlockPos(2, 2, 3));
+        worker.stonecutter = helper.absolutePos(new BlockPos(4, 2, 3));
+        worker.orders.add(new Worker.Order("minecraft:stone_bricks", 16, 0, false));
+        for (int i = 0; i < 3; i++) Jobs.tick(helper.getLevel(), worker);
+        helper.assertTrue(worker.status.startsWith("Need stone"), "Reports the missing input: " + worker.status);
+        helper.assertTrue(worker.orders.size() == 1 && !worker.orders.get(0).finished(), "Order kept");
+        helper.assertTrue(worker.working, "Still on duty");
+        helper.succeed();
+    }
+
+    /** Stonemason: "supply my builders" derives an order from a nearby builder's remaining blueprint materials. */
+    @GameTest(template = "empty")
+    public static void stonemasonDerivesOrdersFromBuilder(GameTestHelper helper) {
+        UUID owner = UUID.randomUUID();
+        Worker mason = spawnWorker(helper, new BlockPos(1, 2, 1));
+        mason.setOwner(owner);
+        mason.role = "stonemason";
+        mason.supplyBuilders = true;
+        Worker builder = spawnWorker(helper, new BlockPos(4, 2, 4));
+        builder.setOwner(owner);
+        builder.role = "builder";
+        builder.blueprint = "my_wall";
+        for (int i = 0; i < 5; i++) {
+            CompoundTag entry = new CompoundTag();
+            entry.putInt("X", i); entry.putInt("Y", 0); entry.putInt("Z", 0);
+            entry.put("State", net.minecraft.nbt.NbtUtils.writeBlockState(Blocks.STONE_BRICKS.defaultBlockState()));
+            builder.blueprintBlocks.add(entry);
+        }
+        CompoundTag dirt = new CompoundTag();
+        dirt.putInt("X", 0); dirt.putInt("Y", 1); dirt.putInt("Z", 0);
+        dirt.put("State", net.minecraft.nbt.NbtUtils.writeBlockState(Blocks.DIRT.defaultBlockState()));
+        builder.blueprintBlocks.add(dirt);
+        StonemasonJobs.refreshBuilderOrders(helper.getLevel(), mason);
+        helper.assertTrue(mason.orders.size() == 1, "One automatic order (dirt is not cuttable): " + mason.orders);
+        Worker.Order order = mason.orders.get(0);
+        helper.assertValueEqual(order.item(), "minecraft:stone_bricks", "order item");
+        helper.assertValueEqual(order.count(), 5, "order count");
+        helper.assertTrue(order.auto(), "flagged as a builder order");
+        CompoundTag tag = new CompoundTag();
+        mason.addAdditionalSaveData(tag);
+        Worker copy = spawnWorker(helper, new BlockPos(6, 2, 1));
+        copy.readAdditionalSaveData(tag);
+        helper.assertTrue(copy.orders.size() == 1 && copy.orders.get(0).auto() && copy.supplyBuilders, "Orders and toggle survive a save");
+        helper.succeed();
+    }
+
+    /** Cook: raw beef and coal from supply go into the smoker (never ore), cooked steak feeds a hungry forester. */
+    @GameTest(template = "empty", timeoutTicks = 400)
+    public static void cookSmokesAndFeeds(GameTestHelper helper) {
+        walledFloor(helper);
+        helper.setBlock(new BlockPos(2, 2, 3), Blocks.BARREL);
+        helper.setBlock(new BlockPos(4, 2, 3), Blocks.SMOKER);
+        helper.setBlock(new BlockPos(3, 2, 4), Blocks.BARREL);
+        helper.setBlock(new BlockPos(4, 2, 2), Blocks.BARREL);
+        net.minecraft.world.Container supply = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(2, 2, 3));
+        net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity smoker =
+            (net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity) helper.getBlockEntity(new BlockPos(4, 2, 3));
+        net.minecraft.world.Container out = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(3, 2, 4));
+        net.minecraft.world.Container mateSupply = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(4, 2, 2));
+        supply.setItem(0, new ItemStack(Items.BEEF, 20));
+        supply.setItem(1, new ItemStack(Items.COAL, 8));
+        supply.setItem(2, new ItemStack(Items.RAW_IRON, 5));
+        UUID owner = UUID.randomUUID();
+        Worker cook = spawnWorker(helper, new BlockPos(3, 2, 2));
+        cook.setOwner(owner);
+        cook.role = "cook";
+        cook.working = true;
+        cook.supply = helper.absolutePos(new BlockPos(2, 2, 3));
+        cook.output = helper.absolutePos(new BlockPos(3, 2, 4));
+        cook.furnaces.add(helper.absolutePos(new BlockPos(4, 2, 3)));
+        for (int i = 0; i < 8 && smoker.getItem(0).isEmpty(); i++) Jobs.tick(helper.getLevel(), cook);
+        helper.assertTrue(smoker.getItem(0).is(Items.BEEF), "Raw beef loaded into the smoker: " + cook.status);
+        helper.assertTrue(count(supply, Items.RAW_IRON) == 5 && bagCount(cook, Items.RAW_IRON) == 0, "Ore is not the cook's business");
+        helper.assertTrue(CookJobs.isRaw(helper.getLevel(), new ItemStack(Items.BEEF)) && CookJobs.isCooked(helper.getLevel(), new ItemStack(Items.COOKED_BEEF)),
+            "Raw and cooked food told apart");
+        // Feeding: a hungry forester with a supply chest in reach gets steak from the cook's shelf.
+        Worker mate = spawnWorker(helper, new BlockPos(5, 2, 3));
+        mate.setOwner(owner);
+        mate.role = "forester";
+        mate.supply = helper.absolutePos(new BlockPos(4, 2, 2));
+        out.setItem(0, new ItemStack(Items.COOKED_BEEF, 12));
+        smoker.setItem(0, ItemStack.EMPTY);
+        smoker.setItem(1, new ItemStack(Items.COAL, 8));
+        supply.setItem(0, ItemStack.EMPTY);
+        supply.setItem(1, ItemStack.EMPTY);
+        for (int i = 0; i < 12 && count(mateSupply, Items.COOKED_BEEF) == 0; i++) Jobs.tick(helper.getLevel(), cook);
+        helper.assertTrue(count(mateSupply, Items.COOKED_BEEF) == CookJobs.FEED_TO, "Eight steaks delivered to the forester's supply: " + cook.status
+            + " (" + count(mateSupply, Items.COOKED_BEEF) + ")");
+        helper.assertTrue(cook.feedTo == null, "Feeding trip closed");
+        helper.succeed();
+    }
+
+    /** Porter courier: empties every owned worker's output chest nearby into its own drop-off, no pickups assigned. */
+    @GameTest(template = "empty", timeoutTicks = 400)
+    public static void porterCollectsFromOwnedOutputs(GameTestHelper helper) {
+        walledFloor(helper);
+        helper.setBlock(new BlockPos(2, 2, 3), Blocks.BARREL);
+        helper.setBlock(new BlockPos(4, 2, 3), Blocks.BARREL);
+        helper.setBlock(new BlockPos(3, 2, 4), Blocks.BARREL);
+        net.minecraft.world.Container a = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(2, 2, 3));
+        net.minecraft.world.Container b = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(4, 2, 3));
+        net.minecraft.world.Container drop = (net.minecraft.world.Container) helper.getBlockEntity(new BlockPos(3, 2, 4));
+        a.setItem(0, new ItemStack(Items.OAK_LOG, 30));
+        b.setItem(0, new ItemStack(Items.COBBLESTONE, 12));
+        UUID owner = UUID.randomUUID();
+        Worker porter = spawnWorker(helper, new BlockPos(3, 2, 2));
+        porter.setOwner(owner);
+        porter.role = "courier";
+        porter.courierMode = "porter";
+        porter.working = true;
+        porter.output = helper.absolutePos(new BlockPos(3, 2, 4));
+        Worker forester = spawnWorker(helper, new BlockPos(1, 2, 5));
+        forester.setOwner(owner); forester.role = "forester"; forester.output = helper.absolutePos(new BlockPos(2, 2, 3));
+        Worker miner = spawnWorker(helper, new BlockPos(6, 2, 5));
+        miner.setOwner(owner); miner.role = "miner"; miner.output = helper.absolutePos(new BlockPos(4, 2, 3));
+        Worker stranger = spawnWorker(helper, new BlockPos(6, 2, 1));
+        stranger.setOwner(UUID.randomUUID()); stranger.role = "miner"; stranger.output = helper.absolutePos(new BlockPos(3, 2, 4));
+        for (int i = 0; i < 12 && (count(drop, Items.OAK_LOG) < 30 || count(drop, Items.COBBLESTONE) < 12); i++) Jobs.tick(helper.getLevel(), porter);
+        helper.assertTrue(porter.porterPickups.size() == 2, "Two owned output chests found (not the stranger's, not its own): " + porter.porterPickups.size());
+        helper.assertTrue(count(drop, Items.OAK_LOG) == 30 && count(drop, Items.COBBLESTONE) == 12, "Everything hauled to the drop-off: " + porter.status);
+        helper.assertTrue(count(a, Items.OAK_LOG) == 0 && count(b, Items.COBBLESTONE) == 0, "Worker outputs emptied");
+        CompoundTag tag = new CompoundTag();
+        porter.addAdditionalSaveData(tag);
+        Worker copy = spawnWorker(helper, new BlockPos(6, 2, 6));
+        copy.readAdditionalSaveData(tag);
+        helper.assertValueEqual(copy.courierMode, "porter", "mode saved");
+        helper.succeed();
+    }
+
     private static Worker spawnWorker(GameTestHelper helper, BlockPos relative) {
         Worker worker = HelpfulWorkers.WORKER.get().create(helper.getLevel());
         if (worker == null) {

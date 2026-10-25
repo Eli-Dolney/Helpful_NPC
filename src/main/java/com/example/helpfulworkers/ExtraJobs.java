@@ -444,8 +444,8 @@ final class ExtraJobs {
             if (!level.isLoaded(furnacePos) || worker.isUnreachable(furnacePos)) continue;
             if (!(level.getBlockEntity(furnacePos) instanceof AbstractFurnaceBlockEntity furnace)) continue;
             BlockState furnaceState = level.getBlockState(furnacePos);
-            if (furnace.getItem(0).isEmpty() && !carrying(level, worker, s -> isSmeltableIn(level, s, furnaceState))) {
-                ItemStack want = firstMatching(supply, s -> isSmeltableIn(level, s, furnaceState));
+            if (furnace.getItem(0).isEmpty() && !carrying(level, worker, s -> wantsToCook(level, worker, s, furnaceState))) {
+                ItemStack want = firstMatching(supply, s -> wantsToCook(level, worker, s, furnaceState));
                 if (!want.isEmpty() && startHaul(level, worker, want)) return true;
             }
             if (furnace.getItem(1).isEmpty() && !carrying(level, worker, ExtraJobs::isFuel)) {
@@ -454,6 +454,12 @@ final class ExtraJobs {
             }
         }
         return false;
+    }
+
+    /** Smeltable here, and for a cook only if it comes out as food. */
+    static boolean wantsToCook(ServerLevel level, Worker worker, ItemStack stack, BlockState furnaceState) {
+        if (!isSmeltableIn(level, stack, furnaceState)) return false;
+        return !"cook".equals(worker.role) || CookJobs.cooksIntoFood(level, stack, furnaceState);
     }
 
     private static boolean startHaul(ServerLevel level, Worker worker, ItemStack want) {
@@ -507,7 +513,12 @@ final class ExtraJobs {
      * furnaces when there are any.
      */
     static void courier(ServerLevel level, Worker worker) {
-        boolean route = !worker.pickups.isEmpty() && worker.output != null;
+        boolean porter = "porter".equals(worker.courierMode);
+        if (porter) refreshPorterPickups(level, worker);
+        List<BlockPos> pickups = porter ? worker.porterPickups : worker.pickups;
+        if (porter && worker.output == null) { worker.setStatusKey(Lang.STATUS_ASSIGN_DROPOFF); worker.markIdle(); return; }
+        if (porter && pickups.isEmpty()) { worker.setStatusKey(Lang.STATUS_PORTER_NO_WORKERS); worker.markIdle(); return; }
+        boolean route = !pickups.isEmpty() && worker.output != null;
         boolean furnaceRun = !worker.furnaces.isEmpty() && worker.supply != null;
         if (!route && !furnaceRun) {
             if (worker.pickups.isEmpty() && worker.furnaces.isEmpty()) worker.setStatusKey(Lang.STATUS_ASSIGN_PICKUPS);
@@ -522,18 +533,36 @@ final class ExtraJobs {
             worker.markWorkFound();
             return;
         }
-        if (route && pickupRound(level, worker)) return;
+        if (route && pickupRound(level, worker, pickups)) return;
         if (furnaceRun && fetchForFurnaces(level, worker)) return;
         worker.setStatusKey(Lang.STATUS_ROUTE_CLEAR);
         worker.markIdle();
     }
 
     /** Visit the next pickup chest (from the saved cursor) that has something takeable. True while busy. */
-    private static boolean pickupRound(ServerLevel level, Worker worker) {
-        int n = worker.pickups.size();
+    /** Porter mode: every owned worker's output chest within range is a pickup (refreshed once a minute). */
+    static final int PORTER_RADIUS = 96;
+    static final long PORTER_SCAN_INTERVAL = 1200;
+
+    static void refreshPorterPickups(ServerLevel level, Worker worker) {
+        long now = level.getGameTime();
+        if (worker.lastPorterScan != 0 && now - worker.lastPorterScan < PORTER_SCAN_INTERVAL && !worker.porterPickups.isEmpty()) return;
+        worker.lastPorterScan = now;
+        worker.porterPickups.clear();
+        if (worker.owner == null) return;
+        for (Worker mate : level.getEntitiesOfClass(Worker.class, worker.getBoundingBox().inflate(PORTER_RADIUS),
+                m -> m != worker && worker.owner.equals(m.owner) && !"courier".equals(m.role) && m.output != null)) {
+            BlockPos out = mate.output;
+            if (out.equals(worker.output) || worker.porterPickups.contains(out)) continue;
+            worker.porterPickups.add(out);
+        }
+    }
+
+    private static boolean pickupRound(ServerLevel level, Worker worker, List<BlockPos> pickups) {
+        int n = pickups.size();
         for (int i = 0; i < n; i++) {
             int index = Math.floorMod(worker.courierCursor + i, n);
-            BlockPos pickup = worker.pickups.get(index);
+            BlockPos pickup = pickups.get(index);
             if (!level.isLoaded(pickup) || worker.isUnreachable(pickup)) continue;
             if (!(level.getBlockEntity(pickup) instanceof Container chest)) continue;
             Pick pick = pickFrom(worker, pickup, chest);
